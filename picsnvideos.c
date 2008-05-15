@@ -39,9 +39,15 @@
 #define MYNAME "Pics&Videos"
 #define MYVERSION VERSION
 
-#define DCIM "/DCIM"
+char *RootDirs[] = {
+    "/DCIM",
+    "/Pictures & Videos",
+    NULL
+};
+
 #define PCDIR "PalmPictures"
 #define DATABASE_FILE "picsnvideos-fetched.gdbm"
+#define UNFILED_ALBUM "Unfiled"
 
 #define LOGL1 JP_LOG_WARN
 #define LOGL2 JP_LOG_WARN
@@ -61,10 +67,12 @@ all the pictures, delete the file\n\
 
 struct PVAlbum {
     unsigned int volref;
+    char root[vfsMAXFILENAME+1];
     char albumName[vfsMAXFILENAME+1];
+    int isUnfiled;
     struct PVAlbum *next;
-};
 
+};
 
 struct PVAlbum *searchForAlbums(int, int *,  int );
 void fetchAlbum(int, GDBM_FILE, struct PVAlbum *);
@@ -256,12 +264,13 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album,
 	pi_buffer_t  *buffer;
     int errorDuringFetch = 0;
 
-    srcPath = malloc(strlen(DCIM)+strlen(album->albumName)+strlen(file)+10);
+    srcPath = malloc(strlen(album->root)+strlen(album->albumName)+
+                     strlen(file)+10);
     if (srcPath==NULL) {
         jp_logf(LOGL3,"Out of memory\n");
         return;
     }
-    sprintf(srcPath,"%s/%s/%s",DCIM,album->albumName,file);
+    sprintf(srcPath,"%s/%s/%s",album->root,album->albumName,file);
         
     if (dlp_VFSFileOpen(sd, album->volref, srcPath, vfsModeRead, &fileRef)<=0) {
           jp_logf(LOGL2,"Could not open file '%s' on volume %d\n",
@@ -368,48 +377,77 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs,  int volcount) {
     struct VFSDirInfo *dirInfo;
     int i, volumeIndex;
     struct PVAlbum *albumList = NULL;
+    int rootIndex = 0;
+    struct PVAlbum *newAlbum;
 
-    for (volumeIndex = 0; volumeIndex < volcount; volumeIndex++) {
-        int volref = volrefs[volumeIndex];
-
-        /* Albums are in /DCIM */
-        if (dlp_VFSFileOpen(sd, volref, DCIM, vfsModeRead, &dirRef)<=0) {
-            jp_logf(LOGL2,"Could not open dir '%s' on volume %d\n",
-                    DCIM, volref);
-            continue;
-        }
-
-        //jp_logf(LOGL1,"Opened dir '%s' on volume %d\n", DCIM, volref);
-
-        dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo));
-        if (dirInfo==NULL) {
-            jp_logf(LOGL3,"Out of memory\n");
-            return NULL;
-        }
+    while (RootDirs[rootIndex] != NULL) {
+        for (volumeIndex = 0; volumeIndex < volcount; volumeIndex++) {
+            int volref = volrefs[volumeIndex];
     
-        dirIterator = vfsIteratorStart;
-        while (dirIterator != vfsIteratorStop) {
-            dlp_VFSDirEntryEnumerate(sd, dirRef, &dirIterator, &maxDirItems, 
-                                 dirInfo);
-            for (i=0; i<maxDirItems; i++) {
-                if (dirInfo[i].attr & vfsFileAttrDirectory) {
-                    struct PVAlbum *newAlbum = malloc(sizeof(struct PVAlbum));
-                    if (newAlbum==NULL) {
-                        jp_logf(LOGL3,"Out of memory\n");
-                        return NULL;
+            if (dlp_VFSFileOpen(sd, volref, RootDirs[rootIndex], 
+                                vfsModeRead, &dirRef)<=0) {
+                jp_logf(LOGL1," Root %s does not exist on volume %d\n", RootDirs[rootIndex],
+                    volref);
+                continue;
+            }
+            jp_logf(LOGL1," Opened root %s on volume %d\n", RootDirs[rootIndex],
+                    volref);
+    
+            dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo));
+            if (dirInfo==NULL) {
+                jp_logf(LOGL3,"Out of memory\n");
+                return NULL;
+            }
+        
+            /* Add the unfiled album, which is simply the root dir. 
+             * Apparently the Treo 650 can store pics in the root dir,
+             * as well as the album dirs
+             */
+            newAlbum = malloc(sizeof(struct PVAlbum));
+            if (newAlbum==NULL) {
+                jp_logf(LOGL3,"Out of memory\n");
+                return NULL;
+            }
+            newAlbum->next = albumList;
+            albumList = newAlbum;
+            newAlbum->albumName[0]=0;
+            strncpy(newAlbum->albumName,UNFILED_ALBUM, vfsMAXFILENAME);
+            strncpy(newAlbum->root,RootDirs[rootIndex], vfsMAXFILENAME);
+            newAlbum->volref = volref;
+            newAlbum->isUnfiled = 1;
+            
+            /* Iterate through the root directory looking for things
+             * that might be albums
+             */
+            dirIterator = vfsIteratorStart;
+            while (dirIterator != vfsIteratorStop) {
+                dlp_VFSDirEntryEnumerate(sd, dirRef, &dirIterator, &maxDirItems, 
+                                     dirInfo);
+                for (i=0; i<maxDirItems; i++) {
+                    if (dirInfo[i].attr & vfsFileAttrDirectory) {
+                        newAlbum = malloc(sizeof(struct PVAlbum));
+                        if (newAlbum==NULL) {
+                            jp_logf(LOGL3,"Out of memory\n");
+                            return NULL;
+                        }
+                        /* Add a new album to growing list */
+                        newAlbum->next = albumList;
+                        albumList = newAlbum;
+                        strncpy(newAlbum->albumName,dirInfo[i].name,
+                                vfsMAXFILENAME);
+                        strncpy(newAlbum->root,RootDirs[rootIndex],
+                                vfsMAXFILENAME);
+                        newAlbum->volref = volref;
+                        newAlbum->isUnfiled = 0;
+                        jp_logf(LOGL1,"  Found album '%s'\n", 
+                                        newAlbum->albumName);
                     }
-                    /* Add a new album to growing list */
-                    newAlbum->next = albumList;
-                    albumList = newAlbum;
-                    strncpy(newAlbum->albumName,dirInfo[i].name,vfsMAXFILENAME);
-                    newAlbum->volref = volref;
-                    //jp_logf(LOGL1,"Found album '%s' on volref %d\n",
-                    //                newAlbum->albumName,volref);
                 }
             }
+            free(dirInfo);
+            dlp_VFSFileClose(sd, dirRef);
         }
-        free(dirInfo);
-        dlp_VFSFileClose(sd, dirRef);
+        ++rootIndex;
     }
     return albumList;
 }
@@ -426,17 +464,27 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
     unsigned long dirIterator;
     FileRef dirRef;
 
-    jp_logf(LOGL2,"  Searching for new pictures and videos in the '%s' album on volume %d\n",album->albumName, album->volref);
+    if (album->isUnfiled) {
+        jp_logf(LOGL2,"  Searching for new unfiled pictures and videos on volume %d\n", album->volref);
+    } else {
+        jp_logf(LOGL2,"  Searching for new pictures and videos in the '%s' album on volume %d\n",album->albumName, album->volref);
+    }
+    jp_logf(LOGL1,"    root=%s  albumName=%s  isUnfiled=%d\n",
+                   album->root, album->albumName, album->isUnfiled);
 
-    srcAlbumDir = malloc(strlen(DCIM)+strlen(album->albumName)+10);
+    srcAlbumDir = malloc(strlen(album->root)+strlen(album->albumName)+10);
     if (srcAlbumDir==NULL) {
         jp_logf(LOGL3,"Out of memory\n");
         return;
     }
-    /* Album is in /DCIM/<albunName> */
-    strcpy(srcAlbumDir,DCIM);
-    strcat(srcAlbumDir,"/");
-    strcat(srcAlbumDir,album->albumName);
+    /* Album is in /<root>/<albunName> */
+    strcpy(srcAlbumDir,album->root);
+
+    /* Unfiled album is really just root dir; this happens on Treo 65O */
+    if (! album->isUnfiled) {
+        strcat(srcAlbumDir,"/");
+        strcat(srcAlbumDir,album->albumName);
+    }
 
     if (dlp_VFSFileOpen(sd, album->volref, srcAlbumDir, vfsModeRead, &dirRef)<=0) {
         jp_logf(LOGL2,"Could not open dir '%s' on volume %d\n",
@@ -456,6 +504,9 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
     }
         
     
+    /* Iterate over all the files in the album dir, looking for
+     * jpegs and 3gp's (videos)
+     */
     dirIterator = vfsIteratorStart;
     while (dirIterator != vfsIteratorStop) {
         int i;
