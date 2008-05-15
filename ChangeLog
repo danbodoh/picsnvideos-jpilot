@@ -1,0 +1,7 @@
+
+Version 0.1   May 12, 2008
+  - Changed destination of pictures and videos to $HOME/PalmPictures
+  - Now uses standard ./configure; make; make install (or 'make local_install'
+    for installation to $HOME/.jpilot/plugins)
+  - Plugin is now named 'libpicsnvideos.so'.  If you used version 0.0,
+    manually delete 'picsnvideos.so' from the plugins directory.

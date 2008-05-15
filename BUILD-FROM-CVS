@@ -1,0 +1,6 @@
+To build from CVS
+
+autoreconf -i
+./configure
+make
+make install or make local_install
