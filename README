@@ -1,0 +1,30 @@
+
+picsnvideos is a plugin for JPilot, which fetches pictures and
+videos from late model Palm smartphones.
+
+It has only been tested on the Centro.  It will probably also work on
+the Treo 680, Treo 700p, and Treo 755p.  Picsnvideos requires that the jpegs
+and videos are stored in a /DCIM hierarchy on either internal memory or
+an expansion card.
+
+This is very early alpha code.  Be warned!
+
+The picsnvideos plugin fetches, rather than syncs.  It keeps a history 
+of previously fetched pictures and videos in the .jpilot directory, 
+so only new pictures and videos are fetched.  It never deletes files or 
+writes to the Palm.  Once a file is fetched, it is never fetched again 
+even if it is moved to a different album.
+
+Files are fetched from the internal memory to $HOME/PilotPictures/Device,
+and from the SD Card to $HOME/PalmPictures/SDCard.  Each album
+is stored in its own subdirectory.  Since the fetch history is stored
+elsewhere, you can delete files from the PilotPictures hierarchy without
+affecting the picsnvideos plugin.
+
+I haven't yet set up the 'configure' script, so you'll have to hack 
+with the Makefile to compile picsnvideos.  Requirements are pilot-link
+and gdbm.  GTK is not required; I've included a hacked libplugin.h
+that comments out all the GTK stuff.
+
+Dan Bodoh
+
