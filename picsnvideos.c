@@ -41,7 +41,7 @@
 
 char *RootDirs[] = {
     "/DCIM",
-    "/Pictures & Videos",
+    "/Photos & Videos",
     NULL
 };
 
