@@ -270,7 +270,11 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album,
         jp_logf(LOGL3,"Out of memory\n");
         return;
     }
-    sprintf(srcPath,"%s/%s/%s",album->root,album->albumName,file);
+    if (album->isUnfiled) {
+        sprintf(srcPath,"%s/%s",album->root,file);
+    } else {
+        sprintf(srcPath,"%s/%s/%s",album->root,album->albumName,file);
+    }
         
     if (dlp_VFSFileOpen(sd, album->volref, srcPath, vfsModeRead, &fileRef)<=0) {
           jp_logf(LOGL2,"Could not open file '%s' on volume %d\n",
@@ -424,6 +428,9 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs,  int volcount) {
                 dlp_VFSDirEntryEnumerate(sd, dirRef, &dirIterator, &maxDirItems, 
                                      dirInfo);
                 for (i=0; i<maxDirItems; i++) {
+                    // treo 650 has #Thumbnail dir that is not an album
+                    if (strcmp(dirInfo[i].name,"#Thumbnail")==0)
+                        continue;
                     if (dirInfo[i].attr & vfsFileAttrDirectory) {
                         newAlbum = malloc(sizeof(struct PVAlbum));
                         if (newAlbum==NULL) {
@@ -517,8 +524,10 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
             int fnlen = strlen(dirInfo[i].name);
 
             /* Must end in .jpg or .3gp (videos) extension */
-            if ( ! (strcmp(&(dirInfo[i].name[fnlen-4]), ".jpg") ||
-                    strcmp(&(dirInfo[i].name[fnlen-4]), ".3gp"))) {
+            if (fnlen < 4) continue;
+
+            if ( (strcmp(&(dirInfo[i].name[fnlen-4]), ".jpg") != 0) &&
+                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".3gp") != 0)) {
 
                     continue;
             }
