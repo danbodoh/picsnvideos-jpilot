@@ -26,13 +26,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <utime.h>
 
 #include <pi-dlp.h>
 #include <pi-source.h>
 #include <pi-util.h>
 
 #include <gdbm.h>
-
 
 #include "libplugin.h"
 
@@ -354,7 +355,27 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album,
             /* remove the partially created file */
             unlink(dstfile);
         } else {
+            int status;
+            time_t date;
+
             fetched = 1;
+
+#ifdef HAVE_UTIME
+            /* Get the date that the picture was created */
+            status = dlp_VFSFileGetDate(sd, fileRef,vfsFileDateCreated ,&date);
+            /* And set the destination file mod time to that date */
+            if (status < 0) {
+                jp_logf(LOGL2, "WARNING: Cannot get file date\n");
+            } else {
+                struct utimbuf t;
+                t.actime = date;
+                t.modtime = date;
+                if (utime(dstfile, &t)!=0) {
+                    jp_logf(LOGL2, "WARNING: Cannot set file date\n");
+                }
+            }
+#endif // HAVE_UTIME
+            
         }
         free(dstfile);
     }
