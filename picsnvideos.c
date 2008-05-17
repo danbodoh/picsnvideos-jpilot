@@ -533,7 +533,7 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
         
     
     /* Iterate over all the files in the album dir, looking for
-     * jpegs and 3gp's (videos)
+     * jpegs and 3gp's and 3g2's (videos)
      */
     dirIterator = vfsIteratorStart;
     while (dirIterator != vfsIteratorStop) {
@@ -544,11 +544,20 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
         for (i=0; i<maxDirItems; i++) {
             int fnlen = strlen(dirInfo[i].name);
 
-            /* Must end in .jpg or .3gp (videos) extension */
-            if (fnlen < 4) continue;
+            if (fnlen < 5) continue;
 
-            if ( (strcmp(&(dirInfo[i].name[fnlen-4]), ".jpg") != 0) &&
-                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".3gp") != 0)) {
+            /* Grab only files with known extensions */
+
+            if ( /* .jpg = jpeg picture */
+                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".jpg") != 0) &&
+                 /* .3gp is video (GSM phones) */
+                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".3gp") != 0) &&
+                 /* .3g2 is video (CDMA phones) */
+                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".3g2") != 0) &&
+                 /* .amr is audio caption (GSM phones) */
+                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".amr") != 0) &&
+                 /* .qcp is audio caption (CDMA phones) */
+                 (strcmp(&(dirInfo[i].name[fnlen-4]), ".qcp") != 0)) { 
 
                     continue;
             }
