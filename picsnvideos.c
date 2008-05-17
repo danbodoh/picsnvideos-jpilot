@@ -1,4 +1,4 @@
-/* $Id: picsnvideos.c,v 1.7 2008/05/17 00:55:43 danbodoh Exp $ */
+/* $Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $ */
 
 /*******************************************************************************
  * picsnvideos.c
@@ -46,7 +46,7 @@ char *RootDirs[] = {
     NULL
 };
 
-char *rcsid = "$Id: picsnvideos.c,v 1.7 2008/05/17 00:55:43 danbodoh Exp $";
+char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 
 #define PCDIR "PalmPictures"
 #define DATABASE_FILE "picsnvideos-fetched.gdbm"
@@ -63,10 +63,8 @@ Fetches pictures and videos from the Pics&Videos\n\
 application in the Palm to the directory '%s' in your.\n\
 home directory.\n\
 \n\
-Downloads each picture only once, even if it is\n\
-moved to a different album in the Palm.  To download\n\
-all the pictures, delete the file\n\
-'%s'.";
+For more documentation, bug reports and new \n\
+versions, see http://sourceforge.net/projects/picsnvideos.";
 
 struct PVAlbum {
     unsigned int volref;
@@ -102,14 +100,12 @@ int plugin_get_help_name(char *name, int len) {
 }
 
 int plugin_help(char **text, int *width, int *height) {
-    char hfn[512];
-    jp_get_home_file_name(DATABASE_FILE, hfn, 511);
 
     *text = malloc(strlen(helpText)+strlen(MYNAME)+strlen(MYVERSION)+
-                   +strlen(PCDIR) + strlen(hfn)+20);
+                   +strlen(PCDIR) +20);
 
     if (*text==NULL) return 0;
-    sprintf(*text,helpText,MYNAME,MYVERSION,PCDIR,hfn);
+    sprintf(*text,helpText,MYNAME,MYVERSION,PCDIR);
     *height = 0;
     *width = 0;
     return 0;
