@@ -1,7 +1,18 @@
+Version 0.2   May 17, 2008
+Dan Bodoh
+
+* Added support for the Treo 650.  Thanks to Raymond Ingles for info
+  about the Treo 650 directory structure and testing.
+* Now fetches .3g2 videos
+* Now fetches audio captions
+* Create-date of fetched file is set to create-date of original file
+* Cleaned up logging; moved most messages to debug logging
 
 Version 0.1   May 12, 2008
-  - Changed destination of pictures and videos to $HOME/PalmPictures
-  - Now uses standard ./configure; make; make install (or 'make local_install'
-    for installation to $HOME/.jpilot/plugins)
-  - Plugin is now named 'libpicsnvideos.so'.  If you used version 0.0,
-    manually delete 'picsnvideos.so' from the plugins directory.
+Dan Bodoh
+
+* Changed destination of pictures and videos to $HOME/PalmPictures
+* Now uses standard ./configure; make; make install (or 'make local_install'
+  for installation to $HOME/.jpilot/plugins)
+* Plugin is now named 'libpicsnvideos.so'.  If you used version 0.0,
+  manually delete 'picsnvideos.so' from the plugins directory.

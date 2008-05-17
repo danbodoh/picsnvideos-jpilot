@@ -1,30 +1,44 @@
 
-picsnvideos is a plugin for JPilot, which fetches pictures and
+Picsnvideos is a plugin for JPilot. It fetches pictures and
 videos from late model Palm smartphones.
 
-It has only been tested on the Centro.  It will probably also work on
-the Treo 680, Treo 700p, and Treo 755p.  Picsnvideos requires that the jpegs
-and videos are stored in a /DCIM hierarchy on either internal memory or
-an expansion card.
+Picsnvideos supports the Treo 650, Treo 680, Treo 700p, Treo 755p, and
+the Centro.  Only the Treo 650 and Centro have been known to be tested.
+Please post your experiences with untested devices at 
+http://sourceforge.net/projects/picsnvideos .
 
-This is very early alpha code.  Be warned!
+This plugin fetches, rather than syncs.  The plugin reads pictures and
+videos taken with the camera on the Palm, and stores them on the computer.  
+It will also fetch audio captions added with the 'Pics&Videos'
+application (known as 'Media' on older Palms). Files are never deleted
+from the Palm or from the computer.
 
-The picsnvideos plugin fetches, rather than syncs.  It keeps a history 
-of previously fetched pictures and videos in the .jpilot directory, 
-so only new pictures and videos are fetched.  It never deletes files or 
-writes to the Palm.  Once a file is fetched, it is never fetched again 
-even if it is moved to a different album.
+Files from the internal memory of the Palm are stored in 
+'$HOME/PalmPictures/Device'.  Files from the Palm's SD Card are stored in 
+'$HOME/PalmPictures/SDCard'.
 
-Files are fetched from the internal memory to $HOME/PilotPictures/Device,
-and from the SD Card to $HOME/PalmPictures/SDCard.  Each album
-is stored in its own subdirectory.  Since the fetch history is stored
-elsewhere, you can delete files from the PilotPictures hierarchy without
-affecting the picsnvideos plugin.
+Each album on the Palm is a directory under 'Device/' or 'SDCard/'.
+Some older Palms will create an 'Unfiled/' directory for pictures and
+videos that have not yet been moved to an album.
 
-I haven't yet set up the 'configure' script, so you'll have to hack 
-with the Makefile to compile picsnvideos.  Requirements are pilot-link
-and gdbm.  GTK is not required; I've included a hacked libplugin.h
-that comments out all the GTK stuff.
+The file extensions of the files that picsnvideos fetches include:
+    .jpg - JPEG pictures
+    .amr - audio photo captions from GSM phones
+    .qcp - audio photo captions from CDMA phones
+    .3gp - video clips from GSM phones
+    .3g2 - video clips from CDMA phones
 
-Dan Bodoh
+The audio photo captions are named <photo_name.jpg>.amr or 
+<photo_name.jpg>.qcp.  For example, the picture 
+photo_051608_001.jpg  will have an audio caption named 
+photo_051608_001.jpg.amr (or .qcp).
 
+Once a picture or video has been fetched, it will never be fetched
+again even if it moved to a different album.  Re-recorded audio captions
+will be refetched.  To force all pictures to be re-fetched, delete
+the file $HOME/.jpilot/picsnvideos-fetched.gdbm.
+
+Problems or suggestions can be reported in the forums or tracker at
+http://sourceforge.net/projects/picsnvideos.  it is helpful to include 
+the output that 'jpilot -d' creates whey you sync.
+This output goes both to standard output and to 'jpilot.log'.
