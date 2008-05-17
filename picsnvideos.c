@@ -1,4 +1,4 @@
-/* $Id: */
+/* $Id: picsnvideos.c,v 1.7 2008/05/17 00:55:43 danbodoh Exp $ */
 
 /*******************************************************************************
  * picsnvideos.c
@@ -46,12 +46,14 @@ char *RootDirs[] = {
     NULL
 };
 
+char *rcsid = "$Id: picsnvideos.c,v 1.7 2008/05/17 00:55:43 danbodoh Exp $";
+
 #define PCDIR "PalmPictures"
 #define DATABASE_FILE "picsnvideos-fetched.gdbm"
 #define UNFILED_ALBUM "Unfiled"
 
-#define LOGL1 JP_LOG_WARN
-#define LOGL2 JP_LOG_WARN
+#define LOGL1 JP_LOG_DEBUG
+#define LOGL2 JP_LOG_GUI
 #define LOGL3 JP_LOG_FATAL
 
 char *helpText = 
@@ -127,6 +129,7 @@ int plugin_sync(int sd) {
     GDBM_FILE gdbmfh;
 
     jp_logf(LOGL2,"Fetching %s\n",MYNAME); 
+    jp_logf(LOGL1,"picsnvideos version %s (%s)\n",VERSION, rcsid);
 
     /* Get list of volumes on pilot.  This function will find hidden
      * volumes, so that we also get the BUILTIN volume
@@ -378,6 +381,8 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album,
             
         }
         free(dstfile);
+    } else {
+        jp_logf(LOGL1,"    key '%s' exists, not copying file\n", key.dptr);
     }
     dlp_VFSFileClose(sd, fileRef);
 
@@ -492,11 +497,8 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
     unsigned long dirIterator;
     FileRef dirRef;
 
-    if (album->isUnfiled) {
-        jp_logf(LOGL2,"  Searching for new unfiled pictures and videos on volume %d\n", album->volref);
-    } else {
-        jp_logf(LOGL2,"  Searching for new pictures and videos in the '%s' album on volume %d\n",album->albumName, album->volref);
-    }
+    jp_logf(LOGL2,"  Searching album '%s' on volume %d\n",
+            album->albumName, album->volref);
     jp_logf(LOGL1,"    root=%s  albumName=%s  isUnfiled=%d\n",
                    album->root, album->albumName, album->isUnfiled);
 
@@ -544,6 +546,8 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
         for (i=0; i<maxDirItems; i++) {
             int fnlen = strlen(dirInfo[i].name);
 
+            jp_logf(LOGL1,"      found file '%s' attribute %x\n",
+                    dirInfo[i].name, dirInfo[i].attr);
             if (fnlen < 5) continue;
 
             /* Grab only files with known extensions */
