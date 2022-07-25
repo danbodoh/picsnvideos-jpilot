@@ -1,3 +1,9 @@
+Version 0.2.1   Jul 22, 2022
+Ulf Zibis <Ulf.Zibis@CoSoCo.de>
+
+* Updated config files.
+* Fixed endless loops by inserting correct casts on iterators.
+
 Version 0.2   May 17, 2008
 Dan Bodoh
 
