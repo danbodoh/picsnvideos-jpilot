@@ -58,13 +58,14 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 
 char *helpText = 
 "%s %s JPilot plugin (c) 2008 by Dan Bodoh\n\
+Contributor: Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 \n\
 Fetches pictures and videos from the Pics&Videos\n\
-application in the Palm to the directory '%s' in your.\n\
-home directory.\n\
+application in the Palm to the directory '%s'\n\
+in your home directory.\n\
 \n\
-For more documentation, bug reports and new \n\
-versions, see http://sourceforge.net/projects/picsnvideos.";
+For more documentation, bug reports and new versions,\n\
+see http://sourceforge.net/projects/picsnvideos.";
 
 struct PVAlbum {
     unsigned int volref;
@@ -445,12 +446,12 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs,  int volcount) {
             /* Iterate through the root directory looking for things
              * that might be albums
              */
-            dirIterator = vfsIteratorStart;
-            while (dirIterator != vfsIteratorStop) {
+            dirIterator = (unsigned long)vfsIteratorStart;
+            while ((enum dlpVFSFileIteratorConstants)dirIterator != vfsIteratorStop) {
                 dlp_VFSDirEntryEnumerate(sd, dirRef, &dirIterator, &maxDirItems, 
                                      dirInfo);
                 for (i=0; i<maxDirItems; i++) {
-                    // treo 650 has #Thumbnail dir that is not an album
+                    // Treo 650 has #Thumbnail dir that is not an album
                     if (strcmp(dirInfo[i].name,"#Thumbnail")==0)
                         continue;
                     if (dirInfo[i].attr & vfsFileAttrDirectory) {
@@ -533,8 +534,8 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
     /* Iterate over all the files in the album dir, looking for
      * jpegs and 3gp's and 3g2's (videos)
      */
-    dirIterator = vfsIteratorStart;
-    while (dirIterator != vfsIteratorStop) {
+    dirIterator = (unsigned long)vfsIteratorStart;
+    while ((enum dlpVFSFileIteratorConstants)dirIterator != vfsIteratorStop) {
         int i;
 
         dlp_VFSDirEntryEnumerate(sd, dirRef, &dirIterator, &maxDirItems, 
