@@ -1,0 +1,8 @@
+autoreconf -i
+./configure --prefix=/usr
+(./configure)
+make clean
+make
+make check
+sodo make install
+(make local_install)
