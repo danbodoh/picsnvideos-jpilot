@@ -44,13 +44,12 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 
 #define PCDIR "PalmPictures"
 #define DATABASE_FILE "picsnvideos-fetched.gdbm"
-#define UNFILED_ALBUM "Unfiled"
 
 #define LOGL1 JP_LOG_DEBUG
 #define LOGL2 JP_LOG_GUI
 #define LOGL3 JP_LOG_FATAL
 
-char *helpText =
+static char *const HELP_TEXT =
 "%s %s JPilot plugin (c) 2008 by Dan Bodoh\n\
 Contributor: Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 \n\
@@ -60,6 +59,8 @@ in your home directory.\n\
 \n\
 For more documentation, bug reports and new versions,\n\
 see http://sourceforge.net/projects/picsnvideos.";
+
+static char *const UNFILED_ALBUM = "Unfiled";
 
 struct PVAlbum {
     unsigned int volref;
@@ -96,10 +97,10 @@ int plugin_get_help_name(char *name, int len) {
 
 int plugin_help(char **text, int *width, int *height) {
 
-    *text = malloc(strlen(helpText) + strlen(MYNAME) + strlen(MYVERSION) + strlen(PCDIR) + 20);
+    *text = malloc(strlen(HELP_TEXT) + strlen(MYNAME) + strlen(MYVERSION) + strlen(PCDIR) + 20);
 
     if (*text==NULL) return 0;
-    sprintf(*text,helpText,MYNAME,MYVERSION,PCDIR);
+    sprintf(*text, HELP_TEXT, MYNAME, MYVERSION, PCDIR);
     *height = 0;
     *width = 0;
     return 0;
@@ -374,6 +375,28 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
 }
 
 /*
+ *  Append new album to the list of albums and return it.
+ */
+struct PVAlbum *apendAlbum(struct PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
+    struct PVAlbum *newAlbum = malloc(sizeof(struct PVAlbum));
+    if (newAlbum==NULL) {
+        jp_logf(LOGL3,"Out of memory\n");
+        // ToDo: free albumList
+        return NULL;
+    }
+    strncpy(newAlbum->albumName, name, vfsMAXFILENAME);
+    newAlbum->albumName[vfsMAXFILENAME-1] = 0;
+    strncpy(newAlbum->root, root, vfsMAXFILENAME);
+    newAlbum->root[vfsMAXFILENAME-1] = 0;
+    newAlbum->volref = volref;
+    newAlbum->isUnfiled = (name == UNFILED_ALBUM) ? 1 : 0;
+    jp_logf(LOGL1,"  Found album '%s'\n",  name);
+    // Add new album to the growing list
+    newAlbum->next = albumList;
+    return newAlbum;
+}
+
+/*
  *  Return a list of albums on all the volumes in volrefs.
  */
 struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
@@ -382,7 +405,6 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
     int maxDirItems = 1024;
     struct VFSDirInfo *dirInfo;
     struct PVAlbum *albumList = NULL;
-    struct PVAlbum *newAlbum;
 
     for (int i = 0; i < sizeof(rootDirs)/sizeof(*rootDirs); i++) {
         jp_logf(LOGL1,"Searching on Root %s\n", rootDirs[i]);
@@ -404,20 +426,10 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
              * Apparently the Treo 650 can store pics in the root dir,
              * as well as the album dirs.
              */
-            newAlbum = malloc(sizeof(struct PVAlbum));
-            if (newAlbum==NULL) {
-                jp_logf(LOGL3,"Out of memory\n");
+            if (!(albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[i], volref))) {
                 return NULL;
+                // ToDo: free albumList
             }
-            strncpy(newAlbum->albumName, UNFILED_ALBUM, vfsMAXFILENAME);
-            newAlbum->albumName[vfsMAXFILENAME-1] = 0;
-            strncpy(newAlbum->root, rootDirs[i], vfsMAXFILENAME);
-            newAlbum->root[vfsMAXFILENAME-1] = 0;
-            newAlbum->volref = volref;
-            newAlbum->isUnfiled = 1;
-            // Add a new album to growing list
-            newAlbum->next = albumList;
-            albumList = newAlbum;
 
             /* Iterate through the root directory, looking for things
              * that might be albums.
@@ -430,21 +442,10 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
                     if (strcmp(dirInfo[i].name,"#Thumbnail")==0)
                         continue;
                     if (dirInfo[i].attr & vfsFileAttrDirectory) {
-                        newAlbum = malloc(sizeof(struct PVAlbum));
-                        if (newAlbum==NULL) {
-                            jp_logf(LOGL3,"Out of memory\n");
+                        if (!(albumList = apendAlbum(albumList, dirInfo[i].name, rootDirs[i], volref))) {
                             return NULL;
+                            // ToDo: free albumList
                         }
-                        strncpy(newAlbum->albumName, dirInfo[i].name, vfsMAXFILENAME);
-                        newAlbum->albumName[vfsMAXFILENAME-1] = 0;
-                        strncpy(newAlbum->root, rootDirs[i], vfsMAXFILENAME);
-                        newAlbum->root[vfsMAXFILENAME-1] = 0;
-                        newAlbum->volref = volref;
-                        newAlbum->isUnfiled = 0;
-                        jp_logf(LOGL1,"  Found album '%s'\n",  newAlbum->albumName);
-                        // Add a new album to growing list
-                        newAlbum->next = albumList;
-                        albumList = newAlbum;
                     }
                 }
             }
