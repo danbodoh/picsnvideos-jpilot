@@ -37,7 +37,7 @@
 
 #include "libplugin.h"
 
-#define MYNAME "Pics&Videos"
+#define MYNAME "Pics&Videos Plugin"
 #define MYVERSION VERSION
 
 char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
@@ -54,7 +54,7 @@ static char *const HELP_TEXT =
 Contributor: Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 \n\
 Fetches pictures and videos from the Pics&Videos\n\
-application in the Palm to the directory '%s'\n\
+storage in the Palm to '%s'\n\
 in your home directory.\n\
 \n\
 For more documentation, bug reports and new versions,\n\
@@ -111,7 +111,6 @@ int plugin_startup(jp_startup_info *info) {
     return 0;
 }
 
-
 int plugin_sync(int sd) {
     int volrefs[16];
     int volcount = 16;
@@ -131,16 +130,14 @@ int plugin_sync(int sd) {
     }
 
     /* Get list of albums on all the volumes. */
-    albumList = searchForAlbums(sd, volrefs, volcount);
-
-    if (albumList==NULL) {
+    if (!(albumList = searchForAlbums(sd, volrefs, volcount))) {
         jp_logf(LOGL2, "Could not find any albums; no pictures fetched.\n");
         return -1;
     }
 
     gdbmfn = malloc(1024);
     if (gdbmfn==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
+        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
         return -1;
     }
     gdbmfn[0]=0;
@@ -149,7 +146,7 @@ int plugin_sync(int sd) {
     gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL);
 
     if (gdbmfh==NULL) {
-        jp_logf(LOGL3, "Failed to open database file '%s'\n",gdbmfn);
+        jp_logf(LOGL3, "Pics&Videos Plugin: Failed to open database '%s'\n", gdbmfn);
     }
     free(gdbmfn);
 
@@ -191,7 +188,7 @@ char *destinationDir(int sd, struct PVAlbum *album) {
 
     /* Next level is indicator of which card */
     if (dlp_VFSVolumeInfo(sd, album->volref, &volInfo) < 0) {
-        jp_logf(LOGL3,"Error: Could not get volume info on volref %d\n", album->volref);
+        jp_logf(LOGL3,"Pics&Videos Plugin: Error: Could not get volume info on volref %d\n", album->volref);
         return NULL;
     }
     card = malloc(16);
@@ -255,7 +252,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
 
     srcPath = malloc(strlen(album->root) + strlen(album->albumName) + strlen(file) + 10);
     if (srcPath==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
+        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
         return;
     }
     if (album->isUnfiled) {
@@ -279,7 +276,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
     key.dptr = fetchedDatabaseKey(album, file, (unsigned int)filesize);
     key.dsize = strlen(key.dptr);
     if (key.dptr==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
+        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
         return;
     }
 
@@ -291,7 +288,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
 
         dstfile = malloc(strlen(dstDir)+strlen(file)+10);
         if (dstfile==NULL) {
-            jp_logf(LOGL3,"Out of memory\n");
+            jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
             return;
         }
         strcpy(dstfile,dstDir);
@@ -301,7 +298,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
 
         fp = fopen(dstfile,"w");
         if (fp==NULL) {
-            jp_logf(LOGL3,"Cannot open %s for writing!\n",dstfile);
+            jp_logf(LOGL3,"Pics&Videos Plugin: Cannot open %s for writing!\n",dstfile);
             free(dstfile);
             return;
         }
@@ -315,7 +312,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
             pi_buffer_clear(buffer);
             readsize = dlp_VFSFileRead(sd, fileRef, buffer, (filesize > buffersize ? buffersize : filesize));
             if (readsize <= 0 )  {
-                jp_logf(LOGL3,"File read error; aborting\n");
+                jp_logf(LOGL3,"Pics&Videos Plugin: File read error; aborting\n");
                 errorDuringFetch = 1;
                 break;
             }
@@ -325,7 +322,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
             while (readsize > 0) {
                 writesize = fwrite(buffer->data+offset, 1, readsize, fp);
                 if (writesize < 0) {
-                    jp_logf(LOGL3,"File write error; aborting\n");
+                    jp_logf(LOGL3,"Pics&Videos Plugin: File write error; aborting\n");
                     errorDuringFetch = 1;
                     break;
                 }
@@ -375,14 +372,24 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
 }
 
 /*
+ *  Free the list of albums and return it as NULL.
+ */
+struct PVAlbum *freeAlbumList(struct PVAlbum *albumList) {
+    for (struct PVAlbum *tmp; (tmp = albumList);) {
+        albumList = albumList->next;
+        free(tmp);
+    }
+    return albumList; // is now NULL;
+}
+
+/*
  *  Append new album to the list of albums and return it.
  */
 struct PVAlbum *apendAlbum(struct PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
     struct PVAlbum *newAlbum = malloc(sizeof(struct PVAlbum));
     if (newAlbum==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
-        // ToDo: free albumList
-        return NULL;
+        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+        return freeAlbumList(albumList);
     }
     strncpy(newAlbum->albumName, name, vfsMAXFILENAME);
     newAlbum->albumName[vfsMAXFILENAME-1] = 0;
@@ -411,15 +418,16 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
         for (int volumeIndex = 0; volumeIndex < volcount; volumeIndex++) {
             int volref = volrefs[volumeIndex];
 
-            if (dlp_VFSFileOpen(sd, volref, rootDirs[i], vfsModeRead, &dirRef)<=0) {
+            if (dlp_VFSFileOpen(sd, volref, rootDirs[i], vfsModeRead, &dirRef) <=0 ) {
                 jp_logf(LOGL1," Root %s does not exist on volume %d\n", rootDirs[i], volref);
                 continue;
             }
             jp_logf(LOGL1," Opened root %s on volume %d\n", rootDirs[i], volref);
             dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo));
             if (dirInfo==NULL) {
-                jp_logf(LOGL3,"Out of memory\n");
-                return NULL;
+                jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+                // ToDo close dirRef
+                return freeAlbumList(albumList);
             }
 
             /* Add the unfiled album, which is simply the root dir.
@@ -427,8 +435,8 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
              * as well as the album dirs.
              */
             if (!(albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[i], volref))) {
-                return NULL;
-                // ToDo: free albumList
+                // ToDo free dirInfo; close dirRef
+                return albumList; // is NULL;
             }
 
             /* Iterate through the root directory, looking for things
@@ -443,8 +451,8 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
                         continue;
                     if (dirInfo[i].attr & vfsFileAttrDirectory) {
                         if (!(albumList = apendAlbum(albumList, dirInfo[i].name, rootDirs[i], volref))) {
-                            return NULL;
-                            // ToDo: free albumList
+                            // ToDo free dirInfo; close dirRef
+                            return albumList; // is NULL;
                         }
                     }
                 }
@@ -488,12 +496,12 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
     }
     dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo));
     if (dirInfo==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
+        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
         return;
     }
     dstAlbumDir = destinationDir(sd, album);
     if (dstAlbumDir==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
+        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
         return;
     }
 
