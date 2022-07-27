@@ -45,9 +45,9 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 #define PCDIR "PalmPictures"
 #define DATABASE_FILE "picsnvideos-fetched.gdbm"
 
-#define LOGL1 JP_LOG_DEBUG
-#define LOGL2 JP_LOG_GUI
-#define LOGL3 JP_LOG_FATAL
+#define L_DEBUG JP_LOG_DEBUG
+#define L_GUI   JP_LOG_GUI
+#define L_FATAL JP_LOG_FATAL
 
 static char *const HELP_TEXT =
 "%s %s JPilot plugin (c) 2008 by Dan Bodoh\n\
@@ -68,12 +68,17 @@ struct PVAlbum {
     char albumName[vfsMAXFILENAME];
     int isUnfiled;
     struct PVAlbum *next;
-
 };
 
 struct PVAlbum *searchForAlbums(int, int *,  int);
 void fetchAlbum(int, GDBM_FILE, struct PVAlbum *);
 int vfsVolumeEnumerateIncludeHidden(int, int *, int *);
+
+int ooM (void *ok) {
+    if (!ok)
+        jp_logf(L_FATAL, "[%s] Out of memory\n", MYNAME);
+    return !ok;
+}
 
 void plugin_version(int *major_version, int *minor_version) {
    *major_version=0;
@@ -115,40 +120,36 @@ int plugin_sync(int sd) {
     int volrefs[16];
     int volcount = 16;
     struct PVAlbum *albumList = NULL;
-    char *gdbmfn;
+    //char *gdbmfn;
     GDBM_FILE gdbmfh;
 
-    jp_logf(LOGL2,"Fetching %s\n",MYNAME);
-    jp_logf(LOGL1,"picsnvideos version %s (%s)\n",VERSION, rcsid);
+    jp_logf(L_GUI,"Fetching %s\n", MYNAME);
+    jp_logf(L_DEBUG,"picsnvideos version %s (%s)\n", VERSION, rcsid);
 
     /* Get list of volumes on pilot. This function will find hidden
      * volumes, so that we also get the BUILTIN volume.
      */
     if (vfsVolumeEnumerateIncludeHidden(sd, &volcount, volrefs) < 0) {
-        jp_logf(LOGL2,"Could not find any VFS volumes; no pictures fetched.\n", MYNAME);
+        jp_logf(L_GUI,"Could not find any VFS volumes; no pictures fetched.\n", MYNAME);
         return -1;
     }
 
     /* Get list of albums on all the volumes. */
     if (!(albumList = searchForAlbums(sd, volrefs, volcount))) {
-        jp_logf(LOGL2, "Could not find any albums; no pictures fetched.\n");
+        jp_logf(L_GUI, "Could not list any albums; no pictures fetched.\n");
         return -1;
     }
 
-    gdbmfn = malloc(1024);
-    if (gdbmfn==NULL) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
-        return -1;
-    }
-    gdbmfn[0]=0;
-    jp_get_home_file_name(DATABASE_FILE, gdbmfn, 1023);
+    //if (ooM(gdbmfn = malloc(1024)) {
+        //return -1;
+    //}
+    char gdbmfn[1024] = {""};
+    jp_get_home_file_name(DATABASE_FILE, gdbmfn, sizeof(gdbmfn-1));
 
-    gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL);
-
-    if (gdbmfh==NULL) {
-        jp_logf(LOGL3, "Pics&Videos Plugin: Failed to open database '%s'\n", gdbmfn);
+    if (!(gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL))) {
+        jp_logf(L_FATAL, "[%s] Failed to open database '%s'\n", MYNAME, gdbmfn);
     }
-    free(gdbmfn);
+    //free(gdbmfn);
 
     /* Iterate over each album, and fetch the files in that album. */
     while (albumList) {
@@ -188,7 +189,7 @@ char *destinationDir(int sd, struct PVAlbum *album) {
 
     /* Next level is indicator of which card */
     if (dlp_VFSVolumeInfo(sd, album->volref, &volInfo) < 0) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Error: Could not get volume info on volref %d\n", album->volref);
+        jp_logf(L_FATAL,"Pics&Videos Plugin: Error: Could not get volume info on volref %d\n", album->volref);
         return NULL;
     }
     card = malloc(16);
@@ -250,9 +251,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
     pi_buffer_t  *buffer;
     int errorDuringFetch = 0;
 
-    srcPath = malloc(strlen(album->root) + strlen(album->albumName) + strlen(file) + 10);
-    if (srcPath==NULL) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+    if (ooM(srcPath = malloc(strlen(album->root) + strlen(album->albumName) + strlen(file) + 10))) {
         return;
     }
     if (album->isUnfiled) {
@@ -262,43 +261,38 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
     }
 
     if (dlp_VFSFileOpen(sd, album->volref, srcPath, vfsModeRead, &fileRef)<=0) {
-          jp_logf(LOGL2,"Could not open file '%s' on volume %d\n", srcPath, album->volref);
+          jp_logf(L_GUI,"Could not open file '%s' on volume %d\n", srcPath, album->volref);
           free(srcPath);
           return;
     }
     if (dlp_VFSFileSize(sd, fileRef, (int *)(&filesize)) < 0) {
-        jp_logf(LOGL2,"Could not get file size '%s' on volume %d\n", srcPath, album->volref);
+        jp_logf(L_GUI,"Could not get file size '%s' on volume %d\n", srcPath, album->volref);
         free(srcPath);
         return;
     }
     free(srcPath);
 
-    key.dptr = fetchedDatabaseKey(album, file, (unsigned int)filesize);
-    key.dsize = strlen(key.dptr);
-    if (key.dptr==NULL) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+    if (ooM(key.dptr = fetchedDatabaseKey(album, file, (unsigned int)filesize))) {
         return;
     }
+    key.dsize = strlen(key.dptr);
 
     /* If file has not already been downloaded, fetch it. */
     if (! gdbm_exists(gdbmfh, key)) {
         char *dstfile;
         FILE *fp;
 
-
-        dstfile = malloc(strlen(dstDir)+strlen(file)+10);
-        if (dstfile==NULL) {
-            jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+        if (ooM(dstfile = malloc(strlen(dstDir) + strlen(file) + 10))) {
             return;
         }
         strcpy(dstfile,dstDir);
         strcat(dstfile,file);
 
-        jp_logf(LOGL2,"    Fetching %s...\n",dstfile);
+        jp_logf(L_GUI,"    Fetching %s...\n",dstfile);
 
         fp = fopen(dstfile,"w");
         if (fp==NULL) {
-            jp_logf(LOGL3,"Pics&Videos Plugin: Cannot open %s for writing!\n",dstfile);
+            jp_logf(L_FATAL,"Pics&Videos Plugin: Cannot open %s for writing!\n", dstfile);
             free(dstfile);
             return;
         }
@@ -312,7 +306,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
             pi_buffer_clear(buffer);
             readsize = dlp_VFSFileRead(sd, fileRef, buffer, (filesize > buffersize ? buffersize : filesize));
             if (readsize <= 0 )  {
-                jp_logf(LOGL3,"Pics&Videos Plugin: File read error; aborting\n");
+                jp_logf(L_FATAL,"Pics&Videos Plugin: File read error; aborting\n");
                 errorDuringFetch = 1;
                 break;
             }
@@ -322,7 +316,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
             while (readsize > 0) {
                 writesize = fwrite(buffer->data+offset, 1, readsize, fp);
                 if (writesize < 0) {
-                    jp_logf(LOGL3,"Pics&Videos Plugin: File write error; aborting\n");
+                    jp_logf(L_FATAL,"Pics&Videos Plugin: File write error; aborting\n");
                     errorDuringFetch = 1;
                     break;
                 }
@@ -344,20 +338,20 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
             status = dlp_VFSFileGetDate(sd, fileRef,vfsFileDateCreated ,&date);
             /* And set the destination file mod time to that date. */
             if (status < 0) {
-                jp_logf(LOGL2, "WARNING: Cannot get file date\n");
+                jp_logf(L_GUI, "WARNING: Cannot get file date\n");
             } else {
                 struct utimbuf t;
                 t.actime = date;
                 t.modtime = date;
                 if (utime(dstfile, &t)!=0) {
-                    jp_logf(LOGL2, "WARNING: Cannot set file date\n");
+                    jp_logf(L_GUI, "WARNING: Cannot set file date\n");
                 }
             }
 #endif // HAVE_UTIME
         }
         free(dstfile);
     } else {
-        jp_logf(LOGL1,"    key '%s' exists, not copying file\n", key.dptr);
+        jp_logf(L_DEBUG,"    key '%s' exists, not copying file\n", key.dptr);
     }
     dlp_VFSFileClose(sd, fileRef);
 
@@ -379,16 +373,16 @@ struct PVAlbum *freeAlbumList(struct PVAlbum *albumList) {
         albumList = albumList->next;
         free(tmp);
     }
-    return albumList; // is now NULL;
+    return albumList; // is now NULL
 }
 
 /*
  *  Append new album to the list of albums and return it.
  */
 struct PVAlbum *apendAlbum(struct PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
-    struct PVAlbum *newAlbum = malloc(sizeof(struct PVAlbum));
-    if (newAlbum==NULL) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+    struct PVAlbum *newAlbum;
+
+    if (ooM(newAlbum = malloc(sizeof(struct PVAlbum)))) {
         return freeAlbumList(albumList);
     }
     strncpy(newAlbum->albumName, name, vfsMAXFILENAME);
@@ -397,7 +391,7 @@ struct PVAlbum *apendAlbum(struct PVAlbum *albumList, const char *name, const ch
     newAlbum->root[vfsMAXFILENAME-1] = 0;
     newAlbum->volref = volref;
     newAlbum->isUnfiled = (name == UNFILED_ALBUM) ? 1 : 0;
-    jp_logf(LOGL1,"  Found album '%s'\n",  name);
+    jp_logf(L_DEBUG,"  Found album '%s'\n",  name);
     // Add new album to the growing list
     newAlbum->next = albumList;
     return newAlbum;
@@ -414,20 +408,18 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
     struct PVAlbum *albumList = NULL;
 
     for (int i = 0; i < sizeof(rootDirs)/sizeof(*rootDirs); i++) {
-        jp_logf(LOGL1,"Searching on Root %s\n", rootDirs[i]);
+        jp_logf(L_DEBUG,"Searching on Root %s\n", rootDirs[i]);
         for (int volumeIndex = 0; volumeIndex < volcount; volumeIndex++) {
             int volref = volrefs[volumeIndex];
 
-            if (dlp_VFSFileOpen(sd, volref, rootDirs[i], vfsModeRead, &dirRef) <=0 ) {
-                jp_logf(LOGL1," Root %s does not exist on volume %d\n", rootDirs[i], volref);
+            if (dlp_VFSFileOpen(sd, volref, rootDirs[i], vfsModeRead, &dirRef) <=0) {
+                jp_logf(L_DEBUG," Root %s does not exist on volume %d\n", rootDirs[i], volref);
                 continue;
             }
-            jp_logf(LOGL1," Opened root %s on volume %d\n", rootDirs[i], volref);
-            dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo));
-            if (dirInfo==NULL) {
-                jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
-                // ToDo close dirRef
-                return freeAlbumList(albumList);
+            jp_logf(L_DEBUG," Opened root %s on volume %d\n", rootDirs[i], volref);
+            if (ooM(dirInfo = malloc(maxDirItems * sizeof(struct VFSDirInfo)))) {
+                albumList = freeAlbumList(albumList);
+                goto closeFile; // albumList is NULL
             }
 
             /* Add the unfiled album, which is simply the root dir.
@@ -435,8 +427,7 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
              * as well as the album dirs.
              */
             if (!(albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[i], volref))) {
-                // ToDo free dirInfo; close dirRef
-                return albumList; // is NULL;
+                goto freeDir; // albumList is NULL
             }
 
             /* Iterate through the root directory, looking for things
@@ -451,14 +442,16 @@ struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
                         continue;
                     if (dirInfo[i].attr & vfsFileAttrDirectory) {
                         if (!(albumList = apendAlbum(albumList, dirInfo[i].name, rootDirs[i], volref))) {
-                            // ToDo free dirInfo; close dirRef
-                            return albumList; // is NULL;
+                            goto freeDir; // albumList is NULL
                         }
                     }
                 }
             }
-            free(dirInfo);
-            dlp_VFSFileClose(sd, dirRef);
+freeDir:    free(dirInfo);
+closeFile:  dlp_VFSFileClose(sd, dirRef);
+            if (!albumList) {
+                return albumList; // Could not list any albums
+            }
         }
     }
     return albumList;
@@ -476,12 +469,10 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
     char *albumName = album->albumName;
     unsigned int volref = album->volref;
 
-    jp_logf(LOGL2,"  Searching album '%s' on volume %d\n", albumName, volref);
-    jp_logf(LOGL1,"    root=%s  albumName=%s  isUnfiled=%d\n", album->root, albumName, album->isUnfiled);
+    jp_logf(L_GUI,"  Searching album '%s' on volume %d\n", albumName, volref);
+    jp_logf(L_DEBUG,"    root=%s  albumName=%s  isUnfiled=%d\n", album->root, albumName, album->isUnfiled);
 
-    srcAlbumDir = malloc(strlen(album->root)+strlen(albumName)+10);
-    if (srcAlbumDir==NULL) {
-        jp_logf(LOGL3,"Out of memory\n");
+    if (ooM(srcAlbumDir = malloc(strlen(album->root) + strlen(albumName) + 10))) {
         return;
     }
     strcpy(srcAlbumDir,album->root); // Album is in /<root>/<albunName>.
@@ -490,18 +481,14 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
         strcat(srcAlbumDir,"/");
         strcat(srcAlbumDir,albumName);
     }
-    if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef)<=0) {
-        jp_logf(LOGL2,"Could not open dir '%s' on volume %d\n", srcAlbumDir, volref);
+    if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef) <= 0) {
+        jp_logf(L_GUI,"Could not open dir '%s' on volume %d\n", srcAlbumDir, volref);
         return;
     }
-    dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo));
-    if (dirInfo==NULL) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+    if (ooM(dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo)))) {
         return;
     }
-    dstAlbumDir = destinationDir(sd, album);
-    if (dstAlbumDir==NULL) {
-        jp_logf(LOGL3,"Pics&Videos Plugin: Out of memory\n");
+    if (ooM(dstAlbumDir = destinationDir(sd, album))) {
         return;
     }
 
@@ -515,7 +502,7 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
             unsigned long attr = dirInfo[i].attr;
             char *name = dirInfo[i].name;
 
-            jp_logf(LOGL1,"      found file '%s' attribute %x\n", name, attr);
+            jp_logf(L_DEBUG,"      found file '%s' attribute %x\n", name, attr);
             // Grab only regular files, but ignore the 'read only' and 'archived' bits,
             // and only with known extensions.
             char *ext = name + strlen(name)-4;
