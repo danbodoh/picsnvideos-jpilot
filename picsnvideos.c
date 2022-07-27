@@ -62,19 +62,21 @@ see http://sourceforge.net/projects/picsnvideos.";
 
 static char *const UNFILED_ALBUM = "Unfiled";
 
-struct PVAlbum {
+typedef struct VFSInfo VFSInfo;
+typedef struct VFSDirInfo VFSDirInfo;
+typedef struct PVAlbum {
     unsigned int volref;
     char root[vfsMAXFILENAME];
     char albumName[vfsMAXFILENAME];
     int isUnfiled;
     struct PVAlbum *next;
-};
+} PVAlbum;
 
-struct PVAlbum *searchForAlbums(int, int *,  int);
-void fetchAlbum(int, GDBM_FILE, struct PVAlbum *);
+PVAlbum *searchForAlbums(int, int *,  int);
+void fetchAlbum(int, GDBM_FILE, PVAlbum *);
 int vfsVolumeEnumerateIncludeHidden(int, int *, int *);
 
-int ooM (void *ok) {
+int ooM(void *ok) {
     if (!ok)
         jp_logf(L_FATAL, "[%s] Out of memory\n", MYNAME);
     return !ok;
@@ -119,7 +121,7 @@ int plugin_startup(jp_startup_info *info) {
 int plugin_sync(int sd) {
     int volrefs[16];
     int volcount = 16;
-    struct PVAlbum *albumList = NULL;
+    PVAlbum *albumList = NULL;
     GDBM_FILE gdbmfh;
 
     jp_logf(L_GUI,"Fetching %s\n", MYNAME);
@@ -147,7 +149,7 @@ int plugin_sync(int sd) {
 
     /* Iterate over each album, and fetch the files in that album. */
     while (albumList) {
-        struct PVAlbum *tmp;
+        PVAlbum *tmp;
         fetchAlbum(sd, gdbmfh, albumList);
         tmp = albumList->next;
         free(albumList);
@@ -162,42 +164,40 @@ int plugin_sync(int sd) {
 }
 
 /*
- *  Return directory name on the PC where
- *  the album should be stored. Returned string is of the form
- *  "/home/danb/PalmPictures/Album/". Directories in
- *  the path are created as needed. User should
- *  free return value. Null is returned if out of memory.
+ * Return directory name on the PC, where the album
+ * should be stored. Returned string is of the form
+ * "/home/danb/PalmPictures/Album/". Directories in
+ * the path are created as needed.
+ * Null is returned if out of memory.
+ * Caller should free return value.
  */
-char *destinationDir(int sd, struct PVAlbum *album) {
+char *destinationDir(int sd, PVAlbum *album) {
     char *dst;
-    int len;
-    char *card;
-    struct VFSInfo volInfo;
+    VFSInfo volInfo;
     char *home;
 
     /* Use $HOME, or current directory if it is not defined */
-    home = getenv("HOME");
-    if (home==NULL) {
+    if (!(home = getenv("HOME"))) {
         home = "./";
     }
 
     /* Next level is indicator of which card */
+    char card[16];
     if (dlp_VFSVolumeInfo(sd, album->volref, &volInfo) < 0) {
         jp_logf(L_FATAL,"[%s] Error: Could not get volume info on volref %d\n", MYNAME, album->volref);
         return NULL;
     }
-    card = malloc(16);
-    if (card==NULL) return NULL;
     if (volInfo.mediaType == pi_mktag('T','F','F','S')) {
-        strncpy(card, "Device", 16);
+        strcpy(card, "Device");
     } else if (volInfo.mediaType == pi_mktag('s','d','i','g')) {
-        strncpy(card, "SDCard", 16);
+        strcpy(card, "SDCard");
     } else {
         sprintf(card,"card%d",volInfo.slotRefNum);
     }
 
-    len = strlen(home) + strlen(PCDIR) + strlen(album->albumName) + strlen(card) + 10;
-    dst = malloc(len);
+    if (ooM(dst = malloc(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(album->albumName) + 5))) {
+        return dst;
+    }
     strcpy(dst, home);
     strcat(dst,"/");
     strcat(dst,PCDIR);
@@ -207,7 +207,6 @@ char *destinationDir(int sd, struct PVAlbum *album) {
 
     strcat(dst,"/");
     strcat(dst,card);
-    free(card);
 
     /* make card directory */
     mkdir(dst, 0777);
@@ -218,23 +217,21 @@ char *destinationDir(int sd, struct PVAlbum *album) {
     /* make album directory */
     mkdir(dst, 0777);
 
-    strcat(dst,"/");
-
-    return dst;
+    return strcat(dst,"/"); // must be free'd by caller
 }
 
 /*
- *  Return a key for the picsandvideos-fetched database.
- *  Value must be free'd by caller.
+ * Return a key for the picsandvideos-fetched database.
+ * Value must be free'd by caller.
  */
-char *fetchedDatabaseKey(struct PVAlbum *album, char *file, unsigned int size) {
+char *fetchedDatabaseKey(PVAlbum *album, char *file, unsigned int size) {
     char *key = malloc(strlen(file) + 64);
     if (key==NULL) return NULL;
     sprintf(key,"%s:%d", file,size);
-    return key;
+    return key; // must be free'd by caller
 }
 
-void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *file, char *dstDir) {
+void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, char *dstDir) {
     char *srcPath;
     FileRef fileRef;
     unsigned int filesize;
@@ -362,8 +359,8 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album, char *fi
 /*
  *  Free the list of albums and return it as NULL.
  */
-struct PVAlbum *freeAlbumList(struct PVAlbum *albumList) {
-    for (struct PVAlbum *tmp; (tmp = albumList);) {
+PVAlbum *freeAlbumList(PVAlbum *albumList) {
+    for (PVAlbum *tmp; (tmp = albumList);) {
         albumList = albumList->next;
         free(tmp);
     }
@@ -373,10 +370,10 @@ struct PVAlbum *freeAlbumList(struct PVAlbum *albumList) {
 /*
  *  Append new album to the list of albums and return it.
  */
-struct PVAlbum *apendAlbum(struct PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
-    struct PVAlbum *newAlbum;
+PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
+    PVAlbum *newAlbum;
 
-    if (ooM(newAlbum = malloc(sizeof(struct PVAlbum)))) {
+    if (ooM(newAlbum = malloc(sizeof(PVAlbum)))) {
         return freeAlbumList(albumList);
     }
     strncpy(newAlbum->albumName, name, vfsMAXFILENAME);
@@ -388,18 +385,18 @@ struct PVAlbum *apendAlbum(struct PVAlbum *albumList, const char *name, const ch
     jp_logf(L_DEBUG,"[%s]   Found album '%s'\n", MYNAME,  name);
     // Add new album to the growing list
     newAlbum->next = albumList;
-    return newAlbum;
+    return newAlbum; // must be free'd by caller
 }
 
 /*
  *  Return a list of albums on all the volumes in volrefs.
  */
-struct PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
+PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
     char *rootDirs[] = {"/DCIM", "/Photos & Videos"};
     FileRef dirRef;
     int maxDirItems = 1024;
-    struct VFSDirInfo *dirInfo;
-    struct PVAlbum *albumList = NULL;
+    VFSDirInfo *dirInfo;
+    PVAlbum *albumList = NULL;
 
     for (int i = 0; i < sizeof(rootDirs)/sizeof(*rootDirs); i++) {
         jp_logf(L_DEBUG,"[%s] Searching on Root %s\n", MYNAME, rootDirs[i]);
@@ -448,41 +445,35 @@ closeFile:  dlp_VFSFileClose(sd, dirRef);
             }
         }
     }
-    return albumList;
+    return albumList; // must be free'd by caller
 }
 
 /*
  * Fetch the contents of one album.
  */
-void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
+void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
+    char *albumName = album->albumName;
     int maxDirItems = 1024;
-    struct VFSDirInfo *dirInfo;
-    char *srcAlbumDir;
+    VFSDirInfo dirInfo[maxDirItems];
+    char srcAlbumDir[strlen(album->root) + strlen(albumName) + 2];
     char *dstAlbumDir;
     FileRef dirRef;
-    char *albumName = album->albumName;
     unsigned int volref = album->volref;
 
     jp_logf(L_GUI,"[%s]   Searching album '%s' on volume %d\n", MYNAME, albumName, volref);
     jp_logf(L_DEBUG,"[%s]     root=%s  albumName=%s  isUnfiled=%d\n", MYNAME, album->root, albumName, album->isUnfiled);
 
-    if (ooM(srcAlbumDir = malloc(strlen(album->root) + strlen(albumName) + 10))) {
-        return;
-    }
-    strcpy(srcAlbumDir,album->root); // Album is in /<root>/<albunName>.
+    strcpy(srcAlbumDir, album->root); // Album is in /<root>/<albunName>.
     // Unfiled album is really just root dir; this happens on Treo 65O.
     if (! album->isUnfiled) {
-        strcat(srcAlbumDir,"/");
-        strcat(srcAlbumDir,albumName);
+        strcat(srcAlbumDir, "/");
+        strcat(srcAlbumDir, albumName);
     }
     if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef) <= 0) {
         jp_logf(L_GUI,"[%s] Could not open dir '%s' on volume %d\n", MYNAME, srcAlbumDir, volref);
         return;
     }
-    if (ooM(dirInfo  = malloc(maxDirItems * sizeof(struct VFSDirInfo)))) {
-        return;
-    }
-    if (ooM(dstAlbumDir = destinationDir(sd, album))) {
+    if (!(dstAlbumDir = destinationDir(sd, album))) {
         return;
     }
 
@@ -517,9 +508,7 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
             fetchFileIfNeeded(sd, gdbmfh, album, name, dstAlbumDir);
         }
     }
-    free(dirInfo);
     dlp_VFSFileClose(sd, dirRef);
-    free(srcAlbumDir);
     free(dstAlbumDir);
 }
 
@@ -541,12 +530,12 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, struct PVAlbum *album) {
  *
  ***********************************************************************/
 int vfsVolumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
-    int             volenumResult;
-    int             result;
-    int             volRefsSize = *numVols;
-    struct VFSInfo  volInfo;
-    int             volRef1Found;
-    int             hiddenVolRef1Found;
+    int      volenumResult;
+    int      result;
+    int      volRefsSize = *numVols;
+    VFSInfo  volInfo;
+    int      volRef1Found;
+    int      hiddenVolRef1Found;
 
     volenumResult = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
     if (volenumResult <= 0) {
