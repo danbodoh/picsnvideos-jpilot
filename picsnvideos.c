@@ -163,6 +163,19 @@ int plugin_sync(int sd) {
     return 0;
 }
 
+int createDir(char *path, char *dir) {
+    strcat(path,"/");
+    strcat(path, dir);
+    int result;
+    if ((result = mkdir(path, 0777))) {
+        if (errno != EEXIST) {
+            jp_logf(L_FATAL,"[%s] Error: Could not create directory %s.\n", MYNAME, path);
+            return result;
+        }
+    }
+    return 0;
+}
+
 /*
  * Return directory name on the PC, where the album
  * should be stored. Returned string is of the form
@@ -176,15 +189,15 @@ char *destinationDir(int sd, PVAlbum *album) {
     VFSInfo volInfo;
     char *home;
 
-    /* Use $HOME, or current directory if it is not defined */
+    // Use $HOME, or current directory if it is not defined.
     if (!(home = getenv("HOME"))) {
         home = "./";
     }
 
-    /* Next level is indicator of which card */
+    // Next level is indicator of which card.
     char card[16];
     if (dlp_VFSVolumeInfo(sd, album->volref, &volInfo) < 0) {
-        jp_logf(L_FATAL,"[%s] Error: Could not get volume info on volref %d\n", MYNAME, album->volref);
+        jp_logf(L_FATAL,"[%s] Error: Could not get volume info on volref %d.\n", MYNAME, album->volref);
         return NULL;
     }
     if (volInfo.mediaType == pi_mktag('T','F','F','S')) {
@@ -192,31 +205,17 @@ char *destinationDir(int sd, PVAlbum *album) {
     } else if (volInfo.mediaType == pi_mktag('s','d','i','g')) {
         strcpy(card, "SDCard");
     } else {
-        sprintf(card,"card%d",volInfo.slotRefNum);
+        sprintf(card,"card%d", volInfo.slotRefNum);
     }
 
     if (ooM(dst = malloc(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(album->albumName) + 5))) {
         return dst;
     }
-    strcpy(dst, home);
-    strcat(dst,"/");
-    strcat(dst,PCDIR);
-
-    /* make PCDIR directory */
-    mkdir(dst, 0777);
-
-    strcat(dst,"/");
-    strcat(dst,card);
-
-    /* make card directory */
-    mkdir(dst, 0777);
-
-    strcat(dst,"/");
-    strcat(dst,album->albumName);
-
-    /* make album directory */
-    mkdir(dst, 0777);
-
+    // Create album directory if not existent.
+    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || createDir(dst, album->albumName)) {
+        free(dst);
+        return NULL;
+    }
     return strcat(dst,"/"); // must be free'd by caller
 }
 
