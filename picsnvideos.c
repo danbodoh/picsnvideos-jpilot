@@ -219,55 +219,37 @@ char *destinationDir(int sd, PVAlbum *album) {
     return strcat(dst,"/"); // must be free'd by caller
 }
 
-/*
- * Return a key for the picsandvideos-fetched database.
- * Value must be free'd by caller.
- */
-char *fetchedDatabaseKey(PVAlbum *album, char *file, unsigned int size) {
-    char *key = malloc(strlen(file) + 64);
-    if (key==NULL) return NULL;
-    sprintf(key,"%s:%d", file,size);
-    return key; // must be free'd by caller
-}
-
 void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, char *dstDir) {
-    char *srcPath;
+    char srcPath[strlen(album->root) + strlen(album->albumName) + strlen(file) + 10];
     FileRef fileRef;
     unsigned int filesize;
-    int fetched = 0;
     datum key, val;
     const unsigned int buffersize = 65536;
     unsigned int readsize, writesize;
     pi_buffer_t  *buffer;
     int errorDuringFetch = 0;
 
-    if (ooM(srcPath = malloc(strlen(album->root) + strlen(album->albumName) + strlen(file) + 10))) {
-        return;
-    }
     if (album->isUnfiled) {
-        sprintf(srcPath,"%s/%s",album->root,file);
+        sprintf(srcPath, "%s/%s", album->root, file);
     } else {
-        sprintf(srcPath,"%s/%s/%s",album->root,album->albumName,file);
+        sprintf(srcPath, "%s/%s/%s", album->root, album->albumName, file);
     }
-
     if (dlp_VFSFileOpen(sd, album->volref, srcPath, vfsModeRead, &fileRef)<=0) {
           jp_logf(L_GUI,"[%s] Could not open file '%s' on volume %d\n", MYNAME, srcPath, album->volref);
-          free(srcPath);
           return;
     }
     if (dlp_VFSFileSize(sd, fileRef, (int *)(&filesize)) < 0) {
         jp_logf(L_GUI,"[%s] Could not get file size '%s' on volume %d\n", MYNAME, srcPath, album->volref);
-        free(srcPath);
         return;
     }
-    free(srcPath);
-
-    if (ooM(key.dptr = fetchedDatabaseKey(album, file, (unsigned int)filesize))) {
+    // Get a key for the picsandvideos-fetched database.
+    if (ooM(key.dptr = malloc(strlen(file) + 16))) {
         return;
     }
+    sprintf(key.dptr,"%s:%d", file, filesize);
     key.dsize = strlen(key.dptr);
 
-    /* If file has not already been downloaded, fetch it. */
+    // If file has not already been downloaded, fetch it.
     if (! gdbm_exists(gdbmfh, key)) {
         char *dstfile;
         FILE *fp;
@@ -280,8 +262,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
 
         jp_logf(L_GUI,"[%s]     Fetching %s...\n", MYNAME, dstfile);
 
-        fp = fopen(dstfile,"w");
-        if (fp==NULL) {
+        if (!(fp = fopen(dstfile,"w"))) {
             jp_logf(L_FATAL,"[%s] Cannot open %s for writing!\n", MYNAME, dstfile);
             free(dstfile);
             return;
@@ -319,39 +300,34 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
         if (errorDuringFetch) {
             unlink(dstfile); // remove the partially created file
         } else {
+            // Inform database, that file has been fetched.
+            val.dptr = "";
+            val.dsize = 1;
+            if (!(gdbm_store(gdbmfh, key, val, GDBM_REPLACE)))
+                jp_logf(L_DEBUG,"[%s]     key '%s' added to database\n", MYNAME, key.dptr);
+#ifdef HAVE_UTIME
             int status;
             time_t date;
-
-            fetched = 1;
-#ifdef HAVE_UTIME
             /* Get the date that the picture was created. */
             status = dlp_VFSFileGetDate(sd, fileRef,vfsFileDateCreated ,&date);
             /* And set the destination file mod time to that date. */
             if (status < 0) {
-                jp_logf(L_GUI, "[%s] WARNING: Cannot get file date\n", MYNAME);
+                jp_logf(L_GUI, "[%s]     WARNING: Cannot get file date\n", MYNAME);
             } else {
                 struct utimbuf t;
                 t.actime = date;
                 t.modtime = date;
                 if (utime(dstfile, &t)!=0) {
-                    jp_logf(L_GUI, "[%s] WARNING: Cannot set file date\n", MYNAME);
+                    jp_logf(L_GUI, "[%s]     WARNING: Cannot set file date\n", MYNAME);
                 }
             }
 #endif // HAVE_UTIME
         }
         free(dstfile);
     } else {
-        jp_logf(L_DEBUG,"[%s]     key '%s' exists, not copying file\n", MYNAME, key.dptr);
+        jp_logf(L_DEBUG,"[%s]     key '%s' exists in database, not copying file\n", MYNAME, key.dptr);
     }
     dlp_VFSFileClose(sd, fileRef);
-
-    // Inform database, that file has been fetched.
-    if (fetched) {
-        int rv;
-        val.dptr = "";
-        val.dsize = 1;
-        rv = gdbm_store(gdbmfh, key, val, GDBM_REPLACE);
-    }
     free(key.dptr);
 }
 
@@ -460,7 +436,7 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
     unsigned int volref = album->volref;
 
     jp_logf(L_GUI,"[%s]   Searching album '%s' on volume %d\n", MYNAME, albumName, volref);
-    jp_logf(L_DEBUG,"[%s]     root=%s  albumName=%s  isUnfiled=%d\n", MYNAME, album->root, albumName, album->isUnfiled);
+    jp_logf(L_DEBUG,"[%s]   root=%s  albumName=%s  isUnfiled=%d\n", MYNAME, album->root, albumName, album->isUnfiled);
 
     strcpy(srcAlbumDir, album->root); // Album is in /<root>/<albunName>.
     // Unfiled album is really just root dir; this happens on Treo 65O.
@@ -486,7 +462,7 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
             unsigned long attr = dirInfo[i].attr;
             char *name = dirInfo[i].name;
 
-            jp_logf(L_DEBUG,"[%s]       found file '%s' attribute %x\n", MYNAME, name, attr);
+            jp_logf(L_DEBUG,"[%s]    found file '%s' attribute %x\n", MYNAME, name, attr);
             // Grab only regular files, but ignore the 'read only' and 'archived' bits,
             // and only with known extensions.
             char *ext = name + strlen(name)-4;
@@ -496,12 +472,12 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
                     vfsFileAttrVolumeLabel |
                     vfsFileAttrDirectory   |
                     vfsFileAttrLink) ||
-                    strlen(name) < 5 ||
-                    strcmp(ext, ".jpg") && // jpeg picture
-                    strcmp(ext, ".3gp") && // video (GSM phones)
-                    strcmp(ext, ".3g2") && // video (CDMA phones)
-                    strcmp(ext, ".amr") && // audio caption (GSM phones)
-                    strcmp(ext, ".qcp")) { // audio caption (CDMA phones)
+                    strlen(name) < 5 || (
+                    strcmp(ext, ".jpg") &&  // jpeg picture
+                    strcmp(ext, ".3gp") &&  // video (GSM phones)
+                    strcmp(ext, ".3g2") &&  // video (CDMA phones)
+                    strcmp(ext, ".amr") &&  // audio caption (GSM phones)
+                    strcmp(ext, ".qcp"))) { // audio caption (CDMA phones)
                 continue;
             }
             fetchFileIfNeeded(sd, gdbmfh, album, name, dstAlbumDir);
