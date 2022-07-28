@@ -6,6 +6,7 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Freed forgotten heap memory.
 * Replaced heap memory use by arrays where possible.
 * Fixed bug, if PC directory could not be created.
+* Check enummeration errors.
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
