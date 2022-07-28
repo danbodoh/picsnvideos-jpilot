@@ -74,25 +74,20 @@ typedef struct PVAlbum {
     struct PVAlbum *next;
 } PVAlbum;
 
-PVAlbum *searchForAlbums(int, int *,  int);
-PVAlbum *freeAlbumList(PVAlbum *);
-void fetchAlbum(int, GDBM_FILE, PVAlbum *);
 int vfsVolumeEnumerateIncludeHidden(int, int *, int *);
-
-int ooM(void *ok) {
-    if (!ok)
-        jp_logf(L_FATAL, "[%s] Out of memory\n", MYNAME);
-    return !ok;
-}
+int ooM(void *);
+PVAlbum *freeAlbumList(PVAlbum *);
+PVAlbum *searchForAlbums(int, int *,  int);
+void fetchAlbum(int, GDBM_FILE, PVAlbum *);
 
 void plugin_version(int *major_version, int *minor_version) {
-   *major_version=0;
-   *minor_version=99;
+    *major_version=0;
+    *minor_version=99;
 }
 
 int plugin_get_name(char *name, int len) {
-   strncpy(name, MYNAME, len);
-   return 0;
+    strncpy(name, MYNAME, len);
+    return 0;
 }
 
 int plugin_get_help_name(char *name, int len) {
@@ -164,6 +159,169 @@ int plugin_sync(int sd) {
     }
 
     return 0;
+}
+
+/***********************************************************************
+ *
+ * Function:      vfsVolumeEnumerateIncludeHidden
+ *
+ * Summary:       Drop-in replacement for dlp_VFSVolumeEnumerate().
+ *                Attempts to include hidden volumes in the list.
+ *                Dan Bodoh, May 2, 2008
+ *
+ * Parameters:
+ *  sd            --> Socket descriptor
+ *  volume_count  <-> on input, size of volumes; on output
+ *                    number of volumes on Palm
+ *  volumes       <-- volume reference numbers
+ *
+ * Returns:       <-- Same as dlp_VFSVolumeEnumerate()
+ *
+ ***********************************************************************/
+int vfsVolumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
+    int      volenumResult;
+    int      result;
+    int      volRefsSize = *numVols;
+    VFSInfo  volInfo;
+    int      volRef1Found;
+    int      hiddenVolRef1Found;
+
+    volenumResult = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
+    if (volenumResult <= 0) {
+        *numVols = 0;
+    }
+    /* On the Centro, it appears that the first non-hidden
+     * volRef is 2, and the hidden volRef is 1. Let's poke
+     * around to see. if there is really a volRef 1 that's
+     * hidden from the dlp_VFSVolumeEnumerate().
+     */
+    volRef1Found = 0;
+    hiddenVolRef1Found = 0;
+    for (int i=0; i<*numVols; i++) {
+        if (volRefs[i]==1) {
+            volRef1Found = 1;
+            break;
+        }
+    }
+    if (volRef1Found) {
+        return volenumResult;
+    }
+    else {
+        result = dlp_VFSVolumeInfo(sd, 1, &volInfo);
+        if (result > 0) {
+            if (volInfo.attributes & vfsVolAttrHidden) {
+                hiddenVolRef1Found = 1;
+            }
+        }
+    }
+    if (hiddenVolRef1Found) {
+        ++ *numVols;
+        if (volRefsSize >= *numVols) {
+            volRefs[*numVols - 1] = 1;
+        }
+        if (volenumResult <= 0) return 4; // fake dlp_VFSVolumeEnumerate() return val with 1 volume
+        else return volenumResult;
+    }
+    return volenumResult;
+}
+
+int ooM(void *ok) {
+    if (!ok)
+        jp_logf(L_FATAL, "[%s] Out of memory\n", MYNAME);
+    return !ok;
+}
+
+/*
+ *  Free the list of albums and return it as NULL.
+ */
+PVAlbum *freeAlbumList(PVAlbum *albumList) {
+    for (PVAlbum *tmp; (tmp = albumList);) {
+        albumList = albumList->next;
+        free(tmp);
+    }
+    jp_logf(L_DEBUG, "[%s]   Album list now completely cleared\n", MYNAME);
+    return albumList; // is now NULL
+}
+
+/*
+ *  Append new album to the list of albums and return it.
+ */
+PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
+    PVAlbum *newAlbum;
+
+    if (ooM(newAlbum = malloc(sizeof(PVAlbum)))) {
+        return freeAlbumList(albumList);
+    }
+    strncpy(newAlbum->name, name, vfsMAXFILENAME);
+    newAlbum->name[vfsMAXFILENAME-1] = 0;
+    strncpy(newAlbum->root, root, vfsMAXFILENAME);
+    newAlbum->root[vfsMAXFILENAME-1] = 0;
+    newAlbum->volref = volref;
+    newAlbum->isUnfiled = (name == UNFILED_ALBUM) ? 1 : 0;
+    newAlbum->next = albumList; // Add new album to the growing list
+    jp_logf(L_DEBUG, "[%s]   Appended album '%s' to the list\n", MYNAME,  name);
+    return newAlbum; // must be free'd by caller
+}
+
+/*
+ *  Return a list of albums on all the volumes in volrefs.
+ */
+PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
+    char *rootDirs[] = {"/DCIM", "/Photos & Videos"};
+    PVAlbum *albumList = NULL;
+
+    for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
+        jp_logf(L_DEBUG, "[%s] Searching on Root '%s'\n", MYNAME, rootDirs[d]);
+        for (int v = 0; v < volcount; v++) {
+            FileRef dirRef;
+
+            if (dlp_VFSFileOpen(sd, volrefs[v], rootDirs[d], vfsModeRead, &dirRef) <= 0) {
+                jp_logf(L_DEBUG, "[%s]  Root '%s' does not exist on volume %d\n", MYNAME, rootDirs[d], volrefs[v]);
+                continue;
+            }
+            jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, rootDirs[d], volrefs[v]);
+
+            /* Add the unfiled album, which is simply the root dir.
+             * Apparently the Treo 650 can store pics in the root dir,
+             * as well as the album dirs.
+             */
+            albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[d], volrefs[v]);
+
+            /* Iterate through the root directory, looking for things
+             * that might be albums.
+             */
+            unsigned long itr = (unsigned long)vfsIteratorStart;
+            while (albumList && (enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
+                int maxDirItems = 1024;
+                VFSDirInfo dirInfo[maxDirItems];
+                //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
+                jp_logf(L_DEBUG, "[%s]    Enumerate root '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, rootDirs[d], dirRef, (int)itr, maxDirItems);
+                int errcode;
+                if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
+                    // Further research is neccessary, see fetchAlbum():
+                    jp_logf(L_FATAL, "[%s]    Enumerate ERROR: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
+                    freeAlbumList(albumList);
+                    break;
+                } else {
+                    jp_logf(L_DEBUG, "[%s]    Enumerate OK: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
+                }
+                for (int i=0; albumList && i<maxDirItems; i++) {
+                    jp_logf(L_DEBUG, "[%s]   Found album candidate '%s'\n", MYNAME,  dirInfo[i].name);
+                    // Treo 650 has #Thumbnail dir that is not an album
+                    if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
+                    //if (dirInfo[i].attr & vfsFileAttrDirectory) { // With thumbnails album
+                        jp_logf(L_DEBUG,"[%s]   Found real album '%s'\n", MYNAME,  dirInfo[i].name);
+                        albumList = apendAlbum(albumList, dirInfo[i].name, rootDirs[d], volrefs[v]);
+                    }
+                }
+            }
+            dlp_VFSFileClose(sd, dirRef);
+            if (!albumList) {
+                return albumList; // Could not list any albums
+            }
+        }
+    }
+    return albumList; // must be free'd by caller
 }
 
 int createDir(char *path, char *dir) {
@@ -328,99 +486,6 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
 }
 
 /*
- *  Free the list of albums and return it as NULL.
- */
-PVAlbum *freeAlbumList(PVAlbum *albumList) {
-    for (PVAlbum *tmp; (tmp = albumList);) {
-        albumList = albumList->next;
-        free(tmp);
-    }
-    jp_logf(L_DEBUG, "[%s]   Album list now completely cleared\n", MYNAME);
-    return albumList; // is now NULL
-}
-
-/*
- *  Append new album to the list of albums and return it.
- */
-PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
-    PVAlbum *newAlbum;
-
-    if (ooM(newAlbum = malloc(sizeof(PVAlbum)))) {
-        return freeAlbumList(albumList);
-    }
-    strncpy(newAlbum->name, name, vfsMAXFILENAME);
-    newAlbum->name[vfsMAXFILENAME-1] = 0;
-    strncpy(newAlbum->root, root, vfsMAXFILENAME);
-    newAlbum->root[vfsMAXFILENAME-1] = 0;
-    newAlbum->volref = volref;
-    newAlbum->isUnfiled = (name == UNFILED_ALBUM) ? 1 : 0;
-    newAlbum->next = albumList; // Add new album to the growing list
-    jp_logf(L_DEBUG, "[%s]   Appended album '%s' to the list\n", MYNAME,  name);
-    return newAlbum; // must be free'd by caller
-}
-
-/*
- *  Return a list of albums on all the volumes in volrefs.
- */
-PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
-    char *rootDirs[] = {"/DCIM", "/Photos & Videos"};
-    PVAlbum *albumList = NULL;
-
-    for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
-        jp_logf(L_DEBUG, "[%s] Searching on Root '%s'\n", MYNAME, rootDirs[d]);
-        for (int v = 0; v < volcount; v++) {
-            FileRef dirRef;
-
-            if (dlp_VFSFileOpen(sd, volrefs[v], rootDirs[d], vfsModeRead, &dirRef) <= 0) {
-                jp_logf(L_DEBUG, "[%s]  Root '%s' does not exist on volume %d\n", MYNAME, rootDirs[d], volrefs[v]);
-                continue;
-            }
-            jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, rootDirs[d], volrefs[v]);
-
-            /* Add the unfiled album, which is simply the root dir.
-             * Apparently the Treo 650 can store pics in the root dir,
-             * as well as the album dirs.
-             */
-            albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[d], volrefs[v]);
-
-            /* Iterate through the root directory, looking for things
-             * that might be albums.
-             */
-            unsigned long itr = (unsigned long)vfsIteratorStart;
-            while (albumList && (enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
-                int maxDirItems = 1024;
-                VFSDirInfo dirInfo[maxDirItems];
-                //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
-                jp_logf(L_DEBUG, "[%s]    Enumerate root '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, rootDirs[d], dirRef, (int)itr, maxDirItems);
-                int errcode;
-                if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
-                    // Further research is neccessary, see fetchAlbum():
-                    jp_logf(L_FATAL, "[%s]    Enumerate ERROR: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
-                    freeAlbumList(albumList);
-                    break;
-                } else {
-                    jp_logf(L_DEBUG, "[%s]    Enumerate OK: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
-                }
-                for (int i=0; albumList && i<maxDirItems; i++) {
-                    jp_logf(L_DEBUG, "[%s]   Found album candidate '%s'\n", MYNAME,  dirInfo[i].name);
-                    // Treo 650 has #Thumbnail dir that is not an album
-                    if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
-                    //if (dirInfo[i].attr & vfsFileAttrDirectory) { // With thumbnails album
-                        jp_logf(L_DEBUG,"[%s]   Found real album '%s'\n", MYNAME,  dirInfo[i].name);
-                        albumList = apendAlbum(albumList, dirInfo[i].name, rootDirs[d], volrefs[v]);
-                    }
-                }
-            }
-            dlp_VFSFileClose(sd, dirRef);
-            if (!albumList) {
-                return albumList; // Could not list any albums
-            }
-        }
-    }
-    return albumList; // must be free'd by caller
-}
-
-/*
  * Fetch the contents of one album.
  */
 void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
@@ -496,68 +561,4 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
     }
     dlp_VFSFileClose(sd, dirRef);
     free(dstAlbumDir);
-}
-
-
-/***********************************************************************
- *
- * Function:    vfsVolumeEnumerateIncludeHidden
- *
- * Summary:     Drop-in replacement for dlp_VFSVolumeEnumerate().
- *              Attempts to include hidden volumes in the list.
- *              Dan Bodoh, May 2, 2008
- *
- * Parameters:  sd     --> Socket descriptor
- *      volume_count   <-> on input, size of volumes; on output
- *                     number of volumes on Palm
- *      volumes        <-- volume reference numbers
- *
- * Returns:    Same as dlp_VFSVolumeEnumerate()
- *
- ***********************************************************************/
-int vfsVolumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
-    int      volenumResult;
-    int      result;
-    int      volRefsSize = *numVols;
-    VFSInfo  volInfo;
-    int      volRef1Found;
-    int      hiddenVolRef1Found;
-
-    volenumResult = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
-    if (volenumResult <= 0) {
-        *numVols = 0;
-    }
-    /* On the Centro, it appears that the first non-hidden
-     * volRef is 2, and the hidden volRef is 1. Let's poke
-     * around to see. if there is really a volRef 1 that's
-     * hidden from the dlp_VFSVolumeEnumerate().
-     */
-    volRef1Found = 0;
-    hiddenVolRef1Found = 0;
-    for (int i=0; i<*numVols; i++) {
-        if (volRefs[i]==1) {
-            volRef1Found = 1;
-            break;
-        }
-    }
-    if (volRef1Found) {
-        return volenumResult;
-    }
-    else {
-        result = dlp_VFSVolumeInfo(sd, 1, &volInfo);
-        if (result > 0) {
-            if (volInfo.attributes & vfsVolAttrHidden) {
-                hiddenVolRef1Found = 1;
-            }
-        }
-    }
-    if (hiddenVolRef1Found) {
-        ++ *numVols;
-        if (volRefsSize >= *numVols) {
-            volRefs[*numVols - 1] = 1;
-        }
-        if (volenumResult <= 0) return 4; // fake dlp_VFSVolumeEnumerate() return val with 1 volume
-        else return volenumResult;
-    }
-    return volenumResult;
 }
