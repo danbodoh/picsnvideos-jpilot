@@ -3,7 +3,8 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 
 * Cleared source code.
 * Merged duplicate code.
-* Freed heap memory.
+* Freed forgotten heap memory.
+* Replaced heap memory use by arrays where possible.
 * Fixed bug, if PC directory could not be created.
 
 Version 0.2.1   Jul 22, 2022

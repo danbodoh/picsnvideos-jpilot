@@ -49,18 +49,19 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 #define L_GUI   JP_LOG_GUI
 #define L_FATAL JP_LOG_FATAL
 
-static char *const HELP_TEXT =
-"%s %s JPilot plugin (c) 2008 by Dan Bodoh\n\
+static char HELP_TEXT[] =
+"JPilot plugin (c) 2008 by Dan Bodoh\n\
 Contributor: Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
+Version: "MYVERSION"\n\
 \n\
 Fetches pictures and videos from the Pics&Videos\n\
-storage in the Palm to '%s'\n\
+storage in the Palm to folder '"PCDIR"'\n\
 in your home directory.\n\
 \n\
 For more documentation, bug reports and new versions,\n\
-see http://sourceforge.net/projects/picsnvideos.";
+see http://sourceforge.net/projects/picsnvideos";
 
-static char *const UNFILED_ALBUM = "Unfiled";
+static char UNFILED_ALBUM[] = "Unfiled";
 
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
@@ -103,11 +104,12 @@ int plugin_get_help_name(char *name, int len) {
 }
 
 int plugin_help(char **text, int *width, int *height) {
-
-    *text = malloc(strlen(HELP_TEXT) + strlen(MYNAME) + strlen(MYVERSION) + strlen(PCDIR) + 20);
-
-    if (*text==NULL) return 0;
-    sprintf(*text, HELP_TEXT, MYNAME, MYVERSION, PCDIR);
+    // Unfortunately JPilot app tries to free the *text memory,
+    // so we must copy the text to new allocated heap memory first.
+    if (!ooM(*text = malloc(strlen(HELP_TEXT) + 1))) {
+        strcpy(*text, HELP_TEXT);
+    }
+    // *text = HELP_TEXT;  // Alternative causes crash !!!
     *height = 0;
     *width = 0;
     return 0;
@@ -131,23 +133,23 @@ int plugin_sync(int sd) {
      * volumes, so that we also get the BUILTIN volume.
      */
     if (vfsVolumeEnumerateIncludeHidden(sd, &volcount, volrefs) < 0) {
-        jp_logf(L_GUI,"[%s] Could not find any VFS volumes; no pictures fetched.\n", MYNAME);
+        jp_logf(L_GUI,"[%s] Could not find any VFS volumes; no pictures fetched\n", MYNAME);
         return -1;
     }
 
-    /* Get list of albums on all the volumes. */
+    // Get list of albums on all the volumes.
     if (!(albumList = searchForAlbums(sd, volrefs, volcount))) {
-        jp_logf(L_GUI, "[%s] Could not list any albums; no pictures fetched.\n", MYNAME);
+        jp_logf(L_GUI, "[%s] Could not list any albums; no pictures fetched\n", MYNAME);
         return -1;
     }
 
     char gdbmfn[1024] = {""};
     jp_get_home_file_name(DATABASE_FILE, gdbmfn, sizeof(gdbmfn-1));
     if (!(gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL))) {
-        jp_logf(L_FATAL, "[%s] Failed to open database '%s'\n", MYNAME, gdbmfn);
+        jp_logf(L_GUI, "[%s] WARNING: Failed to open database '%s'\n", MYNAME, gdbmfn);
     }
 
-    /* Iterate over each album, and fetch the files in that album. */
+    // Iterate over each album, and fetch the files in that album.
     while (albumList) {
         PVAlbum *tmp;
         fetchAlbum(sd, gdbmfh, albumList);
@@ -157,7 +159,6 @@ int plugin_sync(int sd) {
     }
     if (gdbmfh) {
         gdbm_close(gdbmfh);
-        gdbmfh = NULL;
     }
 
     return 0;
@@ -169,7 +170,7 @@ int createDir(char *path, char *dir) {
     int result;
     if ((result = mkdir(path, 0777))) {
         if (errno != EEXIST) {
-            jp_logf(L_FATAL,"[%s] Error: Could not create directory %s.\n", MYNAME, path);
+            jp_logf(L_FATAL,"[%s] Error: Could not create directory %s\n", MYNAME, path);
             return result;
         }
     }
@@ -197,7 +198,7 @@ char *destinationDir(int sd, PVAlbum *album) {
     // Next level is indicator of which card.
     char card[16];
     if (dlp_VFSVolumeInfo(sd, album->volref, &volInfo) < 0) {
-        jp_logf(L_FATAL,"[%s] Error: Could not get volume info on volref %d.\n", MYNAME, album->volref);
+        jp_logf(L_FATAL,"[%s] Error: Could not get volume info on volref %d\n", MYNAME, album->volref);
         return NULL;
     }
     if (volInfo.mediaType == pi_mktag('T','F','F','S')) {
@@ -242,7 +243,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
         jp_logf(L_GUI,"[%s] Could not get file size '%s' on volume %d\n", MYNAME, srcPath, album->volref);
         return;
     }
-    // Get a key for the picsandvideos-fetched database.
+    // Create a key for the picsandvideos-fetched database.
     if (ooM(key.dptr = malloc(strlen(file) + 16))) {
         return;
     }
@@ -250,25 +251,20 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
     key.dsize = strlen(key.dptr);
 
     // If file has not already been downloaded, fetch it.
-    if (! gdbm_exists(gdbmfh, key)) {
-        char *dstfile;
+    if (!gdbm_exists(gdbmfh, key)) {
+        char dstfile[strlen(dstDir) + strlen(file) + 10];
         FILE *fp;
 
-        if (ooM(dstfile = malloc(strlen(dstDir) + strlen(file) + 10))) {
-            return;
-        }
+        // Open destination file.
         strcpy(dstfile,dstDir);
         strcat(dstfile,file);
-
-        jp_logf(L_GUI,"[%s]     Fetching %s...\n", MYNAME, dstfile);
-
+        jp_logf(L_GUI,"[%s]     Fetching %s ...\n", MYNAME, dstfile);
         if (!(fp = fopen(dstfile,"w"))) {
-            jp_logf(L_FATAL,"[%s] Cannot open %s for writing!\n", MYNAME, dstfile);
-            free(dstfile);
+            jp_logf(L_FATAL,"[%s]      Cannot open %s for writing!\n", MYNAME, dstfile);
             return;
         }
 
-        /* This copy code is based on pilot-xfer.c by Kenneth Albanowski. */
+        // This copy code is based on pilot-xfer.c by Kenneth Albanowski.
         buffer = pi_buffer_new(buffersize);
         readsize = 0;
 
@@ -277,7 +273,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
             pi_buffer_clear(buffer);
             readsize = dlp_VFSFileRead(sd, fileRef, buffer, (filesize > buffersize ? buffersize : filesize));
             if (readsize <= 0 )  {
-                jp_logf(L_FATAL,"[%s] File read error; aborting\n", MYNAME);
+                jp_logf(L_FATAL,"[%s]      File read error; aborting\n", MYNAME);
                 errorDuringFetch = 1;
                 break;
             }
@@ -287,7 +283,7 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
             while (readsize > 0) {
                 writesize = fwrite(buffer->data+offset, 1, readsize, fp);
                 if (writesize < 0) {
-                    jp_logf(L_FATAL,"[%s] File write error; aborting\n", MYNAME);
+                    jp_logf(L_FATAL,"[%s]      File write error; aborting\n", MYNAME);
                     errorDuringFetch = 1;
                     break;
                 }
@@ -303,14 +299,17 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
             // Inform database, that file has been fetched.
             val.dptr = "";
             val.dsize = 1;
-            if (!(gdbm_store(gdbmfh, key, val, GDBM_REPLACE)))
-                jp_logf(L_DEBUG,"[%s]     key '%s' added to database\n", MYNAME, key.dptr);
+            if (gdbm_store(gdbmfh, key, val, GDBM_REPLACE)) {
+                jp_logf(L_GUI, "[%s]     WARNING: Failed to add key '%s' to database\n", MYNAME, key.dptr);
+            } else {
+                jp_logf(L_DEBUG, "[%s]     Key '%s' added to database\n", MYNAME, key.dptr);
+            }
 #ifdef HAVE_UTIME
             int status;
             time_t date;
-            /* Get the date that the picture was created. */
+            // Get the date that the picture was created.
             status = dlp_VFSFileGetDate(sd, fileRef,vfsFileDateCreated ,&date);
-            /* And set the destination file mod time to that date. */
+            // And set the destination file mod time to that date.
             if (status < 0) {
                 jp_logf(L_GUI, "[%s]     WARNING: Cannot get file date\n", MYNAME);
             } else {
@@ -323,9 +322,8 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
             }
 #endif // HAVE_UTIME
         }
-        free(dstfile);
     } else {
-        jp_logf(L_DEBUG,"[%s]     key '%s' exists in database, not copying file\n", MYNAME, key.dptr);
+        jp_logf(L_DEBUG, "[%s]     Key '%s' exists in database, not copying file\n", MYNAME, key.dptr);
     }
     dlp_VFSFileClose(sd, fileRef);
     free(key.dptr);
@@ -369,8 +367,6 @@ PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsi
 PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
     char *rootDirs[] = {"/DCIM", "/Photos & Videos"};
     FileRef dirRef;
-    int maxDirItems = 1024;
-    VFSDirInfo *dirInfo;
     PVAlbum *albumList = NULL;
 
     for (int i = 0; i < sizeof(rootDirs)/sizeof(*rootDirs); i++) {
@@ -383,10 +379,6 @@ PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
                 continue;
             }
             jp_logf(L_DEBUG,"[%s]  Opened root %s on volume %d\n", MYNAME, rootDirs[i], volref);
-            if (ooM(dirInfo = malloc(maxDirItems * sizeof(struct VFSDirInfo)))) {
-                albumList = freeAlbumList(albumList);
-                goto closeFile; // albumList is NULL
-            }
 
             /* Add the unfiled album, which is simply the root dir.
              * Apparently the Treo 650 can store pics in the root dir,
@@ -401,6 +393,8 @@ PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
              */
             unsigned long itr = (unsigned long)vfsIteratorStart;
             while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
+                int maxDirItems = 1024;
+                VFSDirInfo dirInfo[maxDirItems];
                 dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo);
                 for (int i=0; i<maxDirItems; i++) {
                     // Treo 650 has #Thumbnail dir that is not an album
@@ -413,7 +407,7 @@ PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
                     }
                 }
             }
-freeDir:    free(dirInfo);
+freeDir:    //free(dirInfo);
 closeFile:  dlp_VFSFileClose(sd, dirRef);
             if (!albumList) {
                 return albumList; // Could not list any albums
@@ -440,7 +434,7 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
 
     strcpy(srcAlbumDir, album->root); // Album is in /<root>/<albunName>.
     // Unfiled album is really just root dir; this happens on Treo 65O.
-    if (! album->isUnfiled) {
+    if (!album->isUnfiled) {
         strcat(srcAlbumDir, "/");
         strcat(srcAlbumDir, albumName);
     }
