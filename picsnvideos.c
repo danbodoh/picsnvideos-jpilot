@@ -75,7 +75,7 @@ typedef struct PVAlbum {
 } PVAlbum;
 
 int vfsVolumeEnumerateIncludeHidden(int, int *, int *);
-int ooM(void *);
+void *mallocLog(size_t);
 PVAlbum *freeAlbumList(PVAlbum *);
 PVAlbum *searchForAlbums(int, int *,  int);
 void fetchAlbum(int, GDBM_FILE, PVAlbum *);
@@ -103,7 +103,7 @@ int plugin_get_help_name(char *name, int len) {
 int plugin_help(char **text, int *width, int *height) {
     // Unfortunately JPilot app tries to free the *text memory,
     // so we must copy the text to new allocated heap memory first.
-    if (!ooM(*text = malloc(strlen(HELP_TEXT) + 1))) {
+    if ((*text = mallocLog(strlen(HELP_TEXT) + 1))) {
         strcpy(*text, HELP_TEXT);
     }
     // *text = HELP_TEXT;  // Alternative causes crash !!!
@@ -143,7 +143,7 @@ int plugin_sync(int sd) {
     char gdbmfn[1024] = {""};
     jp_get_home_file_name(DATABASE_FILE, gdbmfn, sizeof(gdbmfn-1));
     if (!(gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL))) {
-        jp_logf(L_GUI, "[%s] WARNING: Failed to open database '%s'\n", MYNAME, gdbmfn);
+        jp_logf(L_GUI, "[%s] WARNING: Failed to open DB '%s'\n", MYNAME, gdbmfn);
     }
 
     // Iterate over albums, and fetch the files from each album.
@@ -225,10 +225,11 @@ int vfsVolumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
     return volenumResult;
 }
 
-int ooM(void *ok) {
-    if (!ok)
+void *mallocLog(size_t size) {
+    void *p;
+    if (!(p = malloc(size)))
         jp_logf(L_FATAL, "[%s] Out of memory\n", MYNAME);
-    return !ok;
+    return p;
 }
 
 /*
@@ -249,7 +250,7 @@ PVAlbum *freeAlbumList(PVAlbum *albumList) {
 PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
     PVAlbum *newAlbum;
 
-    if (ooM(newAlbum = malloc(sizeof(PVAlbum)))) {
+    if (!(newAlbum = mallocLog(sizeof(PVAlbum)))) {
         return freeAlbumList(albumList);
     }
     strncpy(newAlbum->name, name, vfsMAXFILENAME);
@@ -287,9 +288,9 @@ PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
              */
             albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[d], volrefs[v]);
 
-            /* Iterate through the root directory, looking for things
-             * that might be albums.
-             */
+            // Iterate through the root directory, looking for things that might be albums.
+            
+            // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>, for alternative solution see at fetchAlbum().
             unsigned long itr = (unsigned long)vfsIteratorStart;
             while (albumList && (enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
                 int maxDirItems = 1024;
@@ -369,7 +370,7 @@ char *destinationDir(int sd, PVAlbum *album) {
         sprintf(card,"card%d", volInfo.slotRefNum);
     }
 
-    if (ooM(dst = malloc(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(album->name) + 5))) {
+    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(album->name) + 5))) {
         return dst;
     }
     // Create album directory if not existent.
@@ -399,17 +400,16 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
         jp_logf(L_GUI, "[%s] Could not get file size '%s' on volume %d\n", MYNAME, srcPath, album->volref);
         return;
     }
-    // Create a key for the picsandvideos-fetched database.
-    if (ooM(key.dptr = malloc(strlen(file) + 16))) {
+    // Create a key for the picsandvideos-fetched DB.
+    if (!(key.dptr = mallocLog(strlen(file) + 16))) {
         return;
     }
     sprintf(key.dptr, "%s:%d", file, filesize);
     key.dsize = strlen(key.dptr);
 
-    // If file has not already been downloaded, fetch it.
     if (gdbm_exists(gdbmfh, key)) {
-        jp_logf(L_DEBUG, "[%s]      Key '%s' exists in database, not copying file\n", MYNAME, key.dptr);
-    } else {
+        jp_logf(L_DEBUG, "[%s]      Key '%s' exists in DB, not copying file\n", MYNAME, key.dptr);
+    } else { // If file has not already been downloaded, fetch it.
         char dstfile[strlen(dstDir) + strlen(file) + 10];
         FILE *fp;
 
@@ -454,13 +454,13 @@ void fetchFileIfNeeded(int sd, GDBM_FILE gdbmfh, PVAlbum *album, char *file, cha
         if (errorDuringFetch) {
             unlink(dstfile); // remove the partially created file
         } else {
-            // Inform database, that file has been fetched.
+            // Inform DB, that file has been fetched.
             val.dptr = "";
             val.dsize = 1;
             if (gdbm_store(gdbmfh, key, val, GDBM_REPLACE)) {
-                jp_logf(L_GUI, "[%s]      WARNING: Failed to add key '%s' to database\n", MYNAME, key.dptr);
+                jp_logf(L_GUI, "[%s]      WARNING: Failed to add key '%s' to DB\n", MYNAME, key.dptr);
             } else {
-                jp_logf(L_DEBUG, "[%s]      Key '%s' added to database\n", MYNAME, key.dptr);
+                jp_logf(L_DEBUG, "[%s]      Key '%s' added to DB\n", MYNAME, key.dptr);
             }
 #ifdef HAVE_UTIME
             int status;
@@ -514,15 +514,14 @@ void fetchAlbum(int sd, GDBM_FILE gdbmfh, PVAlbum *album) {
         return;
     }
 
-    /* Iterate over all the files in the album dir, looking for
-     * jpegs and 3gp's and 3g2's (videos).
-     */
-    unsigned long itr = (unsigned long)vfsIteratorStart;
-    while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
+    // Iterate over all the files in the album dir, looking for jpegs and 3gp's and 3g2's (videos).
+    enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
+    while (itr != vfsIteratorStop) {
         //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
         jp_logf(L_DEBUG, "[%s]    Enumerate dir '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, srcAlbumDir, dirRef, (int)itr, maxDirItems);
         int errcode;
-        if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
+        // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>, for alternative solution see at searchForAlbums().
+        if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, (unsigned long *)&itr, &maxDirItems, dirInfo)) < 0) {
             // Further research is neccessary:
             // - Why in case of i.e. setting maxDirItems=4 it works on device, but not on SDCard?
             // - Why then on device itr==-1 even if there ar more files than 4?
