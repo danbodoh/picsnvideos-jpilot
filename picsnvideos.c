@@ -247,17 +247,17 @@ PVAlbum *freeAlbumList(PVAlbum *albumList) {
 /*
  *  Append new album to the list of albums and return it.
  */
-PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsigned volref) {
+PVAlbum *apendAlbum(PVAlbum *albumList, const unsigned volref, const char *root, const char *name) {
     PVAlbum *newAlbum;
 
     if (!(newAlbum = mallocLog(sizeof(PVAlbum)))) {
         return freeAlbumList(albumList);
     }
-    strncpy(newAlbum->name, name, vfsMAXFILENAME);
-    newAlbum->name[vfsMAXFILENAME-1] = 0;
+    newAlbum->volref = volref;
     strncpy(newAlbum->root, root, vfsMAXFILENAME);
     newAlbum->root[vfsMAXFILENAME-1] = 0;
-    newAlbum->volref = volref;
+    strncpy(newAlbum->name, name, vfsMAXFILENAME);
+    newAlbum->name[vfsMAXFILENAME-1] = 0;
     newAlbum->isUnfiled = (name == UNFILED_ALBUM) ? 1 : 0;
     newAlbum->next = albumList; // Add new album to the growing list
     jp_logf(L_DEBUG, "[%s]   Appended album '%s' to the list\n", MYNAME,  name);
@@ -268,12 +268,12 @@ PVAlbum *apendAlbum(PVAlbum *albumList, const char *name, const char *root, unsi
  *  Return a list of albums on all the volumes in volrefs.
  */
 PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
-    char *rootDirs[] = {"/DCIM", "/Photos & Videos"};
     PVAlbum *albumList = NULL;
 
-    for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
-        jp_logf(L_DEBUG, "[%s] Searching on Root '%s'\n", MYNAME, rootDirs[d]);
-        for (int v = 0; v < volcount; v++) {
+    for (int v = 0; v < volcount; v++) {
+        jp_logf(L_DEBUG, "[%s] Searching roots on volume %d\n", MYNAME, volrefs[v]);
+        static const char *rootDirs[] = {"/Photos & Videos", "/DCIM"};
+        for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
             FileRef dirRef;
 
             if (dlp_VFSFileOpen(sd, volrefs[v], rootDirs[d], vfsModeRead, &dirRef) <= 0) {
@@ -286,7 +286,7 @@ PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
              * Apparently the Treo 650 can store pics in the root dir,
              * as well as the album dirs.
              */
-            albumList = apendAlbum(albumList, UNFILED_ALBUM, rootDirs[d], volrefs[v]);
+            albumList = apendAlbum(albumList, volrefs[v], rootDirs[d], UNFILED_ALBUM);
 
             // Iterate through the root directory, looking for things that might be albums.
             
@@ -312,7 +312,7 @@ PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
                     if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
                     //if (dirInfo[i].attr & vfsFileAttrDirectory) { // With thumbnails album
                         jp_logf(L_DEBUG,"[%s]   Found real album '%s'\n", MYNAME,  dirInfo[i].name);
-                        albumList = apendAlbum(albumList, dirInfo[i].name, rootDirs[d], volrefs[v]);
+                        albumList = apendAlbum(albumList, volrefs[v], rootDirs[d], dirInfo[i].name);
                     }
                 }
             }
