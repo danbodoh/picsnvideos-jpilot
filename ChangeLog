@@ -7,6 +7,9 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Replaced heap memory use by arrays where possible.
 * Fixed bug, if PC directory could not be created.
 * Check enummeration errors.
+* Fixed bugs in volumeEnumerateIncludeHidden():
+  If MAX_VOLUMES were reached, last volRef was overwritten by hidden volume ref.
+  Set volRefs in correct order.
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>

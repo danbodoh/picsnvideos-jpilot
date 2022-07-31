@@ -50,7 +50,7 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 #define L_GUI   JP_LOG_GUI
 #define L_FATAL JP_LOG_FATAL
 
-static char HELP_TEXT[] =
+static const char HELP_TEXT[] =
 "JPilot plugin (c) 2008 by Dan Bodoh\n\
 Contributor (2022): Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 Version: "MYVERSION"\n\
@@ -62,7 +62,8 @@ in your home directory.\n\
 For more documentation, bug reports and new versions,\n\
 see http://sourceforge.net/projects/picsnvideos";
 
-static char UNFILED_ALBUM[] = "Unfiled";
+static const char UNFILED_ALBUM[] = "Unfiled";
+static const unsigned MAX_VOLUMES = 16;
 
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
@@ -74,7 +75,7 @@ typedef struct PVAlbum {
     struct PVAlbum *next;
 } PVAlbum;
 
-int vfsVolumeEnumerateIncludeHidden(int, int *, int *);
+int volumeEnumerateIncludeHidden(int, int *, int *);
 void *mallocLog(size_t);
 PVAlbum *freeAlbumList(PVAlbum *);
 PVAlbum *searchForAlbums(int, int *,  int);
@@ -118,18 +119,17 @@ int plugin_startup(jp_startup_info *info) {
 }
 
 int plugin_sync(int sd) {
-    int volrefs[16];
-    int volcount = 16;
+    int volrefs[MAX_VOLUMES];
+    int volcount = MAX_VOLUMES;
     PVAlbum *albumList = NULL;
     GDBM_FILE gdbmfh;
 
     jp_logf(L_GUI, "Fetching %s\n", MYNAME);
     jp_logf(L_DEBUG, "picsnvideos version %s (%s)\n", VERSION, rcsid);
 
-    /* Get list of volumes on pilot. This function will find hidden
-     * volumes, so that we also get the BUILTIN volume.
-     */
-    if (vfsVolumeEnumerateIncludeHidden(sd, &volcount, volrefs) < 0) {
+    // Get list of volumes on pilot. This function will find hidden
+    //volumes, so that we also get the BUILTIN volume.
+    if (volumeEnumerateIncludeHidden(sd, &volcount, volrefs) < 0) {
         jp_logf(L_GUI, "[%s] Could not find any VFS volumes; no pictures fetched\n", MYNAME);
         return -1;
     }
@@ -163,7 +163,7 @@ int plugin_sync(int sd) {
 
 /***********************************************************************
  *
- * Function:      vfsVolumeEnumerateIncludeHidden
+ * Function:      volumeEnumerateIncludeHidden
  *
  * Summary:       Drop-in replacement for dlp_VFSVolumeEnumerate().
  *                Attempts to include hidden volumes in the list.
@@ -178,51 +178,39 @@ int plugin_sync(int sd) {
  * Returns:       <-- Same as dlp_VFSVolumeEnumerate()
  *
  ***********************************************************************/
-int vfsVolumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
-    int      volenumResult;
-    int      result;
-    int      volRefsSize = *numVols;
+int volumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
+    int      bytes;
     VFSInfo  volInfo;
-    int      volRef1Found;
-    int      hiddenVolRef1Found;
 
-    volenumResult = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
-    if (volenumResult <= 0) {
-        *numVols = 0;
+    // bytes on Treo 650:
+    // -301 : No volume (SDCard) found, but maybe hidden volume 1 exists
+    //    4 : At least one volume found, but maybe additional hidden volume 1 exists
+    bytes = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
+    jp_logf(L_DEBUG, "[%s] dlp_VFSVolumeEnumerate result code %d, found %d volumes\n", MYNAME, bytes, *numVols);
+    // On the Centro, Treo 650 and maybe more, it appears that the
+    // first non-hidden volRef is 2, and the hidden volRef is 1.
+    // Let's poke around to see, if there is really a volRef 1
+    // that's hidden from the dlp_VFSVolumeEnumerate().
+    if (bytes < 0)  *numVols = 0; // On Error reset numVols
+    for (int i=0; i<*numVols; i++) { // Search for volume 1
+        jp_logf(L_DEBUG, "[%s] dlp_VFSVolumeEnumerate volRefs[%d]=%d\n", MYNAME, i, volRefs[i]);
+        if (volRefs[i]==1)
+            goto Exit; // No need to search for hidden volume
     }
-    /* On the Centro, it appears that the first non-hidden
-     * volRef is 2, and the hidden volRef is 1. Let's poke
-     * around to see. if there is really a volRef 1 that's
-     * hidden from the dlp_VFSVolumeEnumerate().
-     */
-    volRef1Found = 0;
-    hiddenVolRef1Found = 0;
-    for (int i=0; i<*numVols; i++) {
-        if (volRefs[i]==1) {
-            volRef1Found = 1;
-            break;
+    if (dlp_VFSVolumeInfo(sd, 1, &volInfo) > 0 && volInfo.attributes & vfsVolAttrHidden) {
+        jp_logf(L_DEBUG, "[%s] Found hidden volume 1\n", MYNAME);
+        if (*numVols < MAX_VOLUMES)  (*numVols)++; // eventually discard last volRef
+        for (int i = (*numVols)-1; i > 0; i--) { // Move existing volRefs
+            jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i-1, volRefs[i-1], i, volRefs[i]);
+            volRefs[i] = volRefs[i-1];
         }
+        volRefs[0] = 1;
+        if (bytes < 0)
+            bytes = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
     }
-    if (volRef1Found) {
-        return volenumResult;
-    }
-    else {
-        result = dlp_VFSVolumeInfo(sd, 1, &volInfo);
-        if (result > 0) {
-            if (volInfo.attributes & vfsVolAttrHidden) {
-                hiddenVolRef1Found = 1;
-            }
-        }
-    }
-    if (hiddenVolRef1Found) {
-        ++ *numVols;
-        if (volRefsSize >= *numVols) {
-            volRefs[*numVols - 1] = 1;
-        }
-        if (volenumResult <= 0) return 4; // fake dlp_VFSVolumeEnumerate() return val with 1 volume
-        else return volenumResult;
-    }
-    return volenumResult;
+Exit:
+    jp_logf(L_DEBUG, "[%s] volumeEnumerate final result code %d, found %d volumes\n", MYNAME, bytes, *numVols);
+    return bytes;
 }
 
 void *mallocLog(size_t size) {
@@ -270,7 +258,7 @@ PVAlbum *apendAlbum(PVAlbum *albumList, const unsigned volref, const char *root,
 PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
     PVAlbum *albumList = NULL;
 
-    for (int v = 0; v < volcount; v++) {
+    for (int v=0; v<volcount; v++) {
         jp_logf(L_DEBUG, "[%s] Searching roots on volume %d\n", MYNAME, volrefs[v]);
         static const char *rootDirs[] = {"/Photos & Videos", "/DCIM"};
         for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
