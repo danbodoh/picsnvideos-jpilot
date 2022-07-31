@@ -68,20 +68,11 @@ static GDBM_FILE gdbmfh;
 
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
-typedef struct PVAlbum {
-    unsigned int volref;
-    char root[vfsMAXFILENAME];
-    char name[vfsMAXFILENAME];
-    int isUnfiled;
-    struct PVAlbum *next;
-} PVAlbum;
 
 int volumeEnumerateIncludeHidden(int, int *, int *);
 void *mallocLog(size_t);
 int backupMedia(int, int);
-PVAlbum *freeAlbumList(PVAlbum *);
-PVAlbum *searchForAlbums(int, int *,  int);
-void fetchAlbum(int, PVAlbum *);
+void fetchAlbum(int, const unsigned, const char *, const char *);
 
 void plugin_version(int *major_version, int *minor_version) {
     *major_version=0;
@@ -141,7 +132,7 @@ int plugin_sync(int sd) {
     }
 
 
-    // Scan all the volumes for media.
+    // Scan all the volumes for media and backup them.
     int result = 0;
     for (int i=0; i<volcount; i++) {
         if (backupMedia(sd, volrefs[i])) {
@@ -150,33 +141,6 @@ int plugin_sync(int sd) {
         }
     }
     return result;
-
-    //PVAlbum *albumList = NULL;
-    //// Get list of albums on all the volumes.
-    //if (!(albumList = searchForAlbums(sd, volrefs, volcount))) {
-        //jp_logf(L_GUI, "[%s] Could not list any albums; no pictures fetched\n", MYNAME);
-        //return -1;
-    //}
-
-    //char gdbmfn[1024] = {""};
-    //jp_get_home_file_name(DATABASE_FILE, gdbmfn, sizeof(gdbmfn-1));
-    //if (!(gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL))) {
-        //jp_logf(L_GUI, "[%s] WARNING: Failed to open DB '%s'\n", MYNAME, gdbmfn);
-    //}
-
-    //// Iterate over albums, and fetch the files from each album.
-    //while (albumList) {
-        ////PVAlbum *tmp = albumList;
-        //fetchAlbum(sd, gdbmfh, albumList);
-        //albumList = albumList->next;
-        ////free(tmp);
-    //}
-    //freeAlbumList(albumList);
-    //if (gdbmfh) {
-        //gdbm_close(gdbmfh);
-    //}
-
-    //return 0;
 }
 
 /***********************************************************************
@@ -238,7 +202,9 @@ void *mallocLog(size_t size) {
     return p;
 }
 
-PVAlbum *apendAlbum(PVAlbum *, const unsigned, const char *, const char *);
+/*
+ *  Backup all albums from volume volref.
+ */
 int backupMedia(int sd, int volref) {
     static const char *rootDirs[] = {"/Photos & Videos", "/DCIM"};
 
@@ -254,17 +220,13 @@ int backupMedia(int sd, int volref) {
 
         // Add the unfiled album, which is simply the root dir.
         // Apparently the Treo 650 can store pics in the root dir, as well as the album dirs.
-        PVAlbum *album;
-        if (!(album = apendAlbum(NULL, volref, rootDirs[d], UNFILED_ALBUM))) {
-            return -1;
-        }
-        fetchAlbum(sd, album);
+        fetchAlbum(sd, volref, rootDirs[d], UNFILED_ALBUM);
 
         // Iterate through the root directory, looking for things that might be albums.
         
         // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>, for alternative solution see at fetchAlbum().
         unsigned long itr = (unsigned long)vfsIteratorStart;
-        while (album && (enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
+        while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
             int maxDirItems = 1024;
             VFSDirInfo dirInfo[maxDirItems];
             //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
@@ -273,126 +235,26 @@ int backupMedia(int sd, int volref) {
             if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
                 // Further research is neccessary, see fetchAlbum():
                 jp_logf(L_FATAL, "[%s]    Enumerate ERROR: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
-                freeAlbumList(album);
                 break;
             } else {
                 jp_logf(L_DEBUG, "[%s]    Enumerate OK: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
             }
-            for (int i=0; album && i<maxDirItems; i++) {
+            for (int i=0; i<maxDirItems; i++) {
                 jp_logf(L_DEBUG, "[%s]   Found album candidate '%s'\n", MYNAME,  dirInfo[i].name);
                 // Treo 650 has #Thumbnail dir that is not an album
                 if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
                 //if (dirInfo[i].attr & vfsFileAttrDirectory) { // With thumbnails album
                     jp_logf(L_DEBUG,"[%s]   Found real album '%s'\n", MYNAME,  dirInfo[i].name);
-                    if (!(album = apendAlbum(NULL, volref, rootDirs[d], dirInfo[i].name))) {
-                        break;
-                    }
-                    fetchAlbum(sd, album);
+                    fetchAlbum(sd, volref, rootDirs[d], dirInfo[i].name);
                 }
             }
         }
         dlp_VFSFileClose(sd, dirRef);
-        if (!album) {
-            return -1; // Could not list any albums
-        }
     }
     return 0; // must be free'd by caller
 }
 
-/*
- *  Free the list of albums and return it as NULL.
- */
-PVAlbum *freeAlbumList(PVAlbum *albumList) {
-    for (PVAlbum *tmp; (tmp = albumList);) {
-        albumList = albumList->next;
-        free(tmp);
-    }
-    jp_logf(L_DEBUG, "[%s]   Album list now completely cleared\n", MYNAME);
-    return albumList; // is now NULL
-}
-
-/*
- *  Append new album to the list of albums and return it.
- */
-PVAlbum *apendAlbum(PVAlbum *albumList, const unsigned volref, const char *root, const char *name) {
-    PVAlbum *newAlbum;
-
-    if (!(newAlbum = mallocLog(sizeof(PVAlbum)))) {
-        return freeAlbumList(albumList);
-    }
-    newAlbum->volref = volref;
-    strncpy(newAlbum->root, root, vfsMAXFILENAME);
-    newAlbum->root[vfsMAXFILENAME-1] = 0;
-    strncpy(newAlbum->name, name, vfsMAXFILENAME);
-    newAlbum->name[vfsMAXFILENAME-1] = 0;
-    newAlbum->isUnfiled = (name == UNFILED_ALBUM) ? 1 : 0;
-    newAlbum->next = albumList; // Add new album to the growing list
-    jp_logf(L_DEBUG, "[%s]   Appended album '%s' to the list\n", MYNAME,  name);
-    return newAlbum; // must be free'd by caller
-}
-
-/*
- *  Return a list of albums on all the volumes in volrefs.
- */
-PVAlbum *searchForAlbums(int sd, int *volrefs, int volcount) {
-    PVAlbum *albumList = NULL;
-
-    for (int v=0; v<volcount; v++) {
-        jp_logf(L_DEBUG, "[%s] Searching roots on volume %d\n", MYNAME, volrefs[v]);
-        static const char *rootDirs[] = {"/Photos & Videos", "/DCIM"};
-        for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
-            FileRef dirRef;
-
-            if (dlp_VFSFileOpen(sd, volrefs[v], rootDirs[d], vfsModeRead, &dirRef) <= 0) {
-                jp_logf(L_DEBUG, "[%s]  Root '%s' does not exist on volume %d\n", MYNAME, rootDirs[d], volrefs[v]);
-                continue;
-            }
-            jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, rootDirs[d], volrefs[v]);
-
-            /* Add the unfiled album, which is simply the root dir.
-             * Apparently the Treo 650 can store pics in the root dir,
-             * as well as the album dirs.
-             */
-            albumList = apendAlbum(albumList, volrefs[v], rootDirs[d], UNFILED_ALBUM);
-
-            // Iterate through the root directory, looking for things that might be albums.
-            
-            // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>, for alternative solution see at fetchAlbum().
-            unsigned long itr = (unsigned long)vfsIteratorStart;
-            while (albumList && (enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
-                int maxDirItems = 1024;
-                VFSDirInfo dirInfo[maxDirItems];
-                //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
-                jp_logf(L_DEBUG, "[%s]    Enumerate root '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, rootDirs[d], dirRef, (int)itr, maxDirItems);
-                int errcode;
-                if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
-                    // Further research is neccessary, see fetchAlbum():
-                    jp_logf(L_FATAL, "[%s]    Enumerate ERROR: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
-                    freeAlbumList(albumList);
-                    break;
-                } else {
-                    jp_logf(L_DEBUG, "[%s]    Enumerate OK: errcode=%d, itr=%d, maxDirItems=%d\n", MYNAME, errcode, (int)itr, maxDirItems);
-                }
-                for (int i=0; albumList && i<maxDirItems; i++) {
-                    jp_logf(L_DEBUG, "[%s]   Found album candidate '%s'\n", MYNAME,  dirInfo[i].name);
-                    // Treo 650 has #Thumbnail dir that is not an album
-                    if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
-                    //if (dirInfo[i].attr & vfsFileAttrDirectory) { // With thumbnails album
-                        jp_logf(L_DEBUG,"[%s]   Found real album '%s'\n", MYNAME,  dirInfo[i].name);
-                        albumList = apendAlbum(albumList, volrefs[v], rootDirs[d], dirInfo[i].name);
-                    }
-                }
-            }
-            dlp_VFSFileClose(sd, dirRef);
-            if (!albumList) {
-                return albumList; // Could not list any albums
-            }
-        }
-    }
-    return albumList; // must be free'd by caller
-}
-
-int createDir(char *path, char *dir) {
+int createDir(char *path, const char *dir) {
     strcat(path, "/");
     strcat(path, dir);
     int result;
@@ -413,7 +275,7 @@ int createDir(char *path, char *dir) {
  * Null is returned if out of memory.
  * Caller should free return value.
  */
-char *destinationDir(int sd, PVAlbum *album) {
+char *destinationDir(int sd, const unsigned volref, const char *name) {
     char *dst;
     VFSInfo volInfo;
     char *home;
@@ -425,8 +287,8 @@ char *destinationDir(int sd, PVAlbum *album) {
 
     // Next level is indicator of which card.
     char card[16];
-    if (dlp_VFSVolumeInfo(sd, album->volref, &volInfo) < 0) {
-        jp_logf(L_FATAL, "[%s] Error: Could not get volume info on volref %d\n", MYNAME, album->volref);
+    if (dlp_VFSVolumeInfo(sd, volref, &volInfo) < 0) {
+        jp_logf(L_FATAL, "[%s] Error: Could not get volume info on volref %d\n", MYNAME, volref);
         return NULL;
     }
     if (volInfo.mediaType == pi_mktag('T', 'F', 'F', 'S')) {
@@ -437,51 +299,53 @@ char *destinationDir(int sd, PVAlbum *album) {
         sprintf(card,"card%d", volInfo.slotRefNum);
     }
 
-    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(album->name) + 5))) {
+    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(name) + 5))) {
         return dst;
     }
     // Create album directory if not existent.
-    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || createDir(dst, album->name)) {
+    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || createDir(dst, name)) {
         free(dst);
         return NULL;
     }
     return strcat(dst,"/"); // must be free'd by caller
 }
 
-void fetchFileIfNeeded(int sd, PVAlbum *album, char *file, char *dstDir) {
-    char srcPath[strlen(album->root) + strlen(album->name) + strlen(file) + 10];
+/*
+ * Fetch a file and backup it if not existent.
+ */
+void fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const char *name, char *file, char *dstDir) {
+    char srcPath[strlen(root) + strlen(name) + strlen(file) + 10];
     FileRef fileRef;
     unsigned int filesize;
     datum key, val;
 
-    if (album->isUnfiled) {
-        sprintf(srcPath, "%s/%s", album->root, file);
+    if (name == UNFILED_ALBUM) {
+        sprintf(srcPath, "%s/%s", root, file);
     } else {
-        sprintf(srcPath, "%s/%s/%s", album->root, album->name, file);
+        sprintf(srcPath, "%s/%s/%s", root, name, file);
     }
-    if (dlp_VFSFileOpen(sd, album->volref, srcPath, vfsModeRead, &fileRef) <= 0) {
-          jp_logf(L_GUI, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, album->volref);
+    if (dlp_VFSFileOpen(sd, volref, srcPath, vfsModeRead, &fileRef) <= 0) {
+          jp_logf(L_GUI, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
           return;
     }
     if (dlp_VFSFileSize(sd, fileRef, (int *)(&filesize)) < 0) {
-        jp_logf(L_GUI, "[%s]     Could not get file size '%s' on volume %d\n", MYNAME, srcPath, album->volref);
+        jp_logf(L_GUI, "[%s]     Could not get file size '%s' on volume %d\n", MYNAME, srcPath, volref);
         return;
     }
     // Create a key for the picsandvideos-fetched DB.
-    if (!(key.dptr = mallocLog(strlen(file) + 16))) {
-        return;
+    if ((key.dptr = mallocLog(strlen(file) + 16))) {
+        sprintf(key.dptr, "%s:%d", file, filesize);
+        key.dsize = strlen(key.dptr);
     }
-    sprintf(key.dptr, "%s:%d", file, filesize);
-    key.dsize = strlen(key.dptr);
 
-    if (gdbmfh && gdbm_exists(gdbmfh, key)) {
+    if (gdbmfh && key.dptr && gdbm_exists(gdbmfh, key)) {
         jp_logf(L_DEBUG, "[%s]     Key '%s' exists in DB, not copying file\n", MYNAME, key.dptr);
     } else { // If file has not already been downloaded, fetch it.
         char dstfile[strlen(dstDir) + strlen(file) + 10];
         FILE *fp;
 
-        if (!gdbmfh) {
-            jp_logf(L_GUI, "[%s]     WARNING: Failed to access DB '%s'\n", MYNAME, gdbmfh);
+        if (!gdbmfh || !key.dptr) {
+            jp_logf(L_GUI, "[%s]     WARNING: Failed to access DB\n", MYNAME);
         }
         // Open destination file.
         strcpy(dstfile,dstDir);
@@ -527,14 +391,14 @@ void fetchFileIfNeeded(int sd, PVAlbum *album, char *file, char *dstDir) {
             // Inform DB, that file has been fetched.
             val.dptr = "";
             val.dsize = 1;
-            if (gdbmfh) {
+            if (gdbmfh && key.dptr) {
                 if (gdbm_store(gdbmfh, key, val, GDBM_REPLACE)) {
                     jp_logf(L_GUI, "[%s]      WARNING: Failed to add key '%s' to DB\n", MYNAME, key.dptr);
                 } else {
-                    jp_logf(L_DEBUG, "[%s]      Key '%s' added to DB\n", MYNAME, key.dptr);
+                    jp_logf(L_DEBUG, "[%s]      Key '%s' added to DBn", MYNAME, key.dptr);
                 }
             } else {
-                jp_logf(L_GUI, "[%s]     WARNING: Failed to access DB '%s'\n", MYNAME, gdbmfh);
+                jp_logf(L_GUI, "[%s]     WARNING: Failed to access DB\n", MYNAME);
             }
 #ifdef HAVE_UTIME
             int status;
@@ -560,31 +424,30 @@ void fetchFileIfNeeded(int sd, PVAlbum *album, char *file, char *dstDir) {
 }
 
 /*
- * Fetch the contents of one album.
+ * Fetch the contents of one album and backup them if not existent.
  */
-void fetchAlbum(int sd, PVAlbum *album) {
+void fetchAlbum(int sd, const unsigned volref, const char *root, const char *name) {
     int maxDirItems = 1024;
     VFSDirInfo dirInfo[maxDirItems];
-    char srcAlbumDir[strlen(album->root) + strlen(album->name) + 2];
+    char srcAlbumDir[strlen(root) + strlen(name) + 2];
     char *dstAlbumDir;
     FileRef dirRef;
-    unsigned int volref = album->volref;
 
-    jp_logf(L_GUI, "[%s]   Fetching album '%s' on volume %d\n", MYNAME, album->name, volref);
-    jp_logf(L_DEBUG, "[%s]   root=%s  name=%s  isUnfiled=%d\n", MYNAME, album->root, album->name, album->isUnfiled);
+    jp_logf(L_GUI, "[%s]   Fetching album '%s' on volume %d\n", MYNAME, name, volref);
+    jp_logf(L_DEBUG, "[%s]   root=%s  name=%s  isUnfiled=%d\n", MYNAME, root, name, name == UNFILED_ALBUM);
 
-    strcpy(srcAlbumDir, album->root); // Album is in /<root>/<albunName>.
+    strcpy(srcAlbumDir, root); // Album is in /<root>/<albunName>.
     // Unfiled album is really just root dir; this happens on Treo 65O.
-    if (!album->isUnfiled) {
+    if (name != UNFILED_ALBUM) {
         strcat(srcAlbumDir, "/");
-        strcat(srcAlbumDir, album->name);
+        strcat(srcAlbumDir, name);
     }
     if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef) <= 0) {
         jp_logf(L_GUI, "[%s]   Could not open dir '%s' on volume %d\n", MYNAME, srcAlbumDir, volref);
         return;
     }
     jp_logf(L_DEBUG, "[%s]   Opened dir '%s', dirRef=%lu\n", MYNAME, srcAlbumDir, dirRef);
-    if (!(dstAlbumDir = destinationDir(sd, album))) {
+    if (!(dstAlbumDir = destinationDir(sd, volref, name))) {
         return;
     }
 
@@ -608,12 +471,12 @@ void fetchAlbum(int sd, PVAlbum *album) {
         }
         jp_logf(L_DEBUG, "[%s]    Enumerated: itr=%d, maxDirItems=%d\n", MYNAME, (int)itr, maxDirItems);
         for (int i=0; i<maxDirItems; i++) {
-            char *name = dirInfo[i].name;
+            char *fname = dirInfo[i].name;
 
-            jp_logf(L_DEBUG, "[%s]     Found file '%s' attribute %x\n", MYNAME, name, dirInfo[i].attr);
+            jp_logf(L_DEBUG, "[%s]     Found file '%s' attribute %x\n", MYNAME, fname, dirInfo[i].attr);
             // Grab only regular files, but ignore the 'read only' and 'archived' bits,
             // and only with known extensions.
-            char *ext = name + strlen(name)-4;
+            char *ext = fname + strlen(fname)-4;
             if (dirInfo[i].attr & (
                     vfsFileAttrHidden      |
                     vfsFileAttrSystem      |
@@ -629,7 +492,7 @@ void fetchAlbum(int sd, PVAlbum *album) {
                     strcmp(ext, ".qcp"))) { // audio caption (CDMA phones)
                 continue;
             }
-            fetchFileIfNeeded(sd, album, name, dstAlbumDir);
+            fetchFileIfNeeded(sd, volref, root, name, fname, dstAlbumDir);
         }
     }
     dlp_VFSFileClose(sd, dirRef);
