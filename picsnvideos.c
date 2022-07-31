@@ -62,9 +62,10 @@ in your home directory.\n\
 For more documentation, bug reports and new versions,\n\
 see http://sourceforge.net/projects/picsnvideos";
 
-static const char UNFILED_ALBUM[] = "Unfiled";
-static const unsigned MAX_VOLUMES = 16;
 static GDBM_FILE gdbmfh;
+static const unsigned MAX_VOLUMES = 16;
+static const char *ROOTDIRS[] = {"/Photos & Videos", "/DCIM"};
+static const char UNFILED_ALBUM[] = "Unfiled";
 
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
@@ -118,8 +119,7 @@ int plugin_sync(int sd) {
     jp_logf(L_GUI, "Fetching %s\n", MYNAME);
     jp_logf(L_DEBUG, "picsnvideos version %s (%s)\n", VERSION, rcsid);
 
-    // Get list of volumes on pilot. This function will find hidden
-    // volumes, so that we also get the BUILTIN volume.
+    // Get list of the volumes on the pilot.
     if (volumeEnumerateIncludeHidden(sd, &volcount, volrefs) < 0) {
         jp_logf(L_GUI, "[%s] Could not find any VFS volumes; no pictures fetched\n", MYNAME);
         return -1;
@@ -133,12 +133,13 @@ int plugin_sync(int sd) {
 
 
     // Scan all the volumes for media and backup them.
-    int result = 0;
+    int result = -1;
     for (int i=0; i<volcount; i++) {
         if (backupMedia(sd, volrefs[i])) {
-            jp_logf(L_GUI, "[%s] Could not find any media on volume %d; no pictures fetched\n", MYNAME, volrefs[i]);
-            result = -1;
+            jp_logf(L_GUI, "[%s] Could not find any media root on volume %d; no pictures fetched\n", MYNAME, volrefs[i]);
+            continue;
         }
+        result = 0;
     }
     return result;
 }
@@ -148,7 +149,8 @@ int plugin_sync(int sd) {
  * Function:      volumeEnumerateIncludeHidden
  *
  * Summary:       Drop-in replacement for dlp_VFSVolumeEnumerate().
- *                Attempts to include hidden volumes in the list.
+ *                Attempts to include hidden volumes in the list,
+ *                so that we also get the device's BUILTIN volume.
  *                Dan Bodoh, May 2, 2008
  *
  * Parameters:
@@ -206,21 +208,22 @@ void *mallocLog(size_t size) {
  *  Backup all albums from volume volref.
  */
 int backupMedia(int sd, int volref) {
-    static const char *rootDirs[] = {"/Photos & Videos", "/DCIM"};
+    int result = -1;
 
     jp_logf(L_DEBUG, "[%s] Searching roots on volume %d\n", MYNAME, volref);
-    for (int d = 0; d < sizeof(rootDirs)/sizeof(*rootDirs); d++) {
+    for (int d = 0; d < sizeof(ROOTDIRS)/sizeof(*ROOTDIRS); d++) {
         FileRef dirRef;
 
-        if (dlp_VFSFileOpen(sd, volref, rootDirs[d], vfsModeRead, &dirRef) <= 0) {
-            jp_logf(L_DEBUG, "[%s]  Root '%s' does not exist on volume %d\n", MYNAME, rootDirs[d], volref);
+        if (dlp_VFSFileOpen(sd, volref, ROOTDIRS[d], vfsModeRead, &dirRef) <= 0) {
+            jp_logf(L_DEBUG, "[%s]  Root '%s' does not exist on volume %d\n", MYNAME, ROOTDIRS[d], volref);
             continue;
         }
-        jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, rootDirs[d], volref);
+        result = 0;
+        jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, ROOTDIRS[d], volref);
 
         // Add the unfiled album, which is simply the root dir.
-        // Apparently the Treo 650 can store pics in the root dir, as well as the album dirs.
-        fetchAlbum(sd, volref, rootDirs[d], UNFILED_ALBUM);
+        // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
+        fetchAlbum(sd, volref, ROOTDIRS[d], UNFILED_ALBUM);
 
         // Iterate through the root directory, looking for things that might be albums.
         
@@ -230,7 +233,7 @@ int backupMedia(int sd, int volref) {
             int maxDirItems = 1024;
             VFSDirInfo dirInfo[maxDirItems];
             //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
-            jp_logf(L_DEBUG, "[%s]    Enumerate root '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, rootDirs[d], dirRef, (int)itr, maxDirItems);
+            jp_logf(L_DEBUG, "[%s]    Enumerate root '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, (int)itr, maxDirItems);
             int errcode;
             if ((errcode = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
                 // Further research is neccessary, see fetchAlbum():
@@ -245,13 +248,13 @@ int backupMedia(int sd, int volref) {
                 if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
                 //if (dirInfo[i].attr & vfsFileAttrDirectory) { // With thumbnails album
                     jp_logf(L_DEBUG,"[%s]   Found real album '%s'\n", MYNAME,  dirInfo[i].name);
-                    fetchAlbum(sd, volref, rootDirs[d], dirInfo[i].name);
+                    fetchAlbum(sd, volref, ROOTDIRS[d], dirInfo[i].name);
                 }
             }
         }
         dlp_VFSFileClose(sd, dirRef);
     }
-    return 0; // must be free'd by caller
+    return result;
 }
 
 int createDir(char *path, const char *dir) {
