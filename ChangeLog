@@ -14,6 +14,7 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Fetch and backup files immediately after album found.
 * Got rid of using gdbm data base.
 * Fixed bug: File date & time on backuped media was wrong.
+* Fixed bug if file extensions are uppercase.
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>

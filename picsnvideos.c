@@ -463,13 +463,13 @@ void fetchAlbum(int sd, const unsigned volref, const char *root, const char *nam
                     vfsFileAttrDirectory   |
                     vfsFileAttrLink) ||
                     strlen(name) < 5 || (
-                    //strcmp(ext, ".thb") &&  // thumbnail from album #Thumbnail (Treo 650)
-                    //strcmp(ext+1, ".db") && // DB file
-                    strcmp(ext, ".jpg") &&  // JPEG picture
-                    strcmp(ext, ".3gp") &&  // video (GSM phones)
-                    strcmp(ext, ".3g2") &&  // video (CDMA phones)
-                    strcmp(ext, ".amr") &&  // audio caption (GSM phones)
-                    strcmp(ext, ".qcp"))) { // audio caption (CDMA phones)
+                    //strcasecmp(ext, ".thb") &&  // thumbnail from album #Thumbnail (Treo 650)
+                    //strcasecmp(ext+1, ".db") && // DB file
+                    strcasecmp(ext, ".jpg") &&  // JPEG picture
+                    strcasecmp(ext, ".3gp") &&  // video (GSM phones)
+                    strcasecmp(ext, ".3g2") &&  // video (CDMA phones)
+                    strcasecmp(ext, ".amr") &&  // audio caption (GSM phones)
+                    strcasecmp(ext, ".qcp"))) { // audio caption (CDMA phones)
                 continue;
             }
             fetchFileIfNeeded(sd, volref, root, name, fname, dstAlbumDir);
