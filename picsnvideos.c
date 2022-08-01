@@ -110,20 +110,20 @@ int plugin_startup(jp_startup_info *info) {
 
 int plugin_sync(int sd) {
     int volrefs[MAX_VOLUMES];
-    int volcount = MAX_VOLUMES;
+    int volumes = MAX_VOLUMES;
 
     jp_logf(L_GUI, "Fetching %s\n", MYNAME);
     jp_logf(L_DEBUG, "picsnvideos version %s (%s)\n", VERSION, rcsid);
 
     // Get list of the volumes on the pilot.
-    if (volumeEnumerateIncludeHidden(sd, &volcount, volrefs) < 0) {
+    if (volumeEnumerateIncludeHidden(sd, &volumes, volrefs) < 0) {
         jp_logf(L_GUI, "[%s] Could not find any VFS volumes; no pictures fetched\n", MYNAME);
         return -1;
     }
 
     // Scan all the volumes for media and backup them.
     int result = -1;
-    for (int i=0; i<volcount; i++) {
+    for (int i=0; i<volumes; i++) {
         if (backupMedia(sd, volrefs[i])) {
             jp_logf(L_GUI, "[%s] Could not find any media root on volume %d; no pictures fetched\n", MYNAME, volrefs[i]);
             continue;
@@ -222,20 +222,20 @@ int backupMedia(int sd, int volref) {
         // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>, for alternative solution see at fetchAlbum().
         unsigned long itr = (unsigned long)vfsIteratorStart;
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
-            int maxDirItems = 1024;
-            VFSDirInfo dirInfo[maxDirItems];
-            //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
-            jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, (int)itr, maxDirItems);
+            int dirItems = 1024;
+            VFSDirInfo dirInfo[dirItems];
+            //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfo); // original code whithout checking error
+            jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%d, itr=%d, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, (int)itr, dirItems);
             PI_ERR bytes;
-            if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo)) < 0) {
+            if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfo)) < 0) {
                 // Further research is neccessary, see fetchAlbum():
-                jp_logf(L_FATAL, "[%s]  Enumerate ERROR: bytes=%d, itr=%d, maxDirItems=%d\n", MYNAME, bytes, (int)itr, maxDirItems);
+                jp_logf(L_FATAL, "[%s]  Enumerate ERROR: bytes=%d, itr=%d, dirItems=%d\n", MYNAME, bytes, (int)itr, dirItems);
                 break;
             } else {
-                jp_logf(L_DEBUG, "[%s]  Enumerate OK: bytes=%d, itr=%d, maxDirItems=%d\n", MYNAME, bytes, (int)itr, maxDirItems);
+                jp_logf(L_DEBUG, "[%s]  Enumerate OK: bytes=%d, itr=%d, dirItems=%d\n", MYNAME, bytes, (int)itr, dirItems);
             }
             jp_logf(L_DEBUG, "[%s]  Now search for albums to fetch ...\n", MYNAME);
-            for (int i=0; i<maxDirItems; i++) {
+            for (int i=0; i<dirItems; i++) {
                 jp_logf(L_DEBUG, "[%s]   Found album candidate '%s'\n", MYNAME,  dirInfo[i].name);
                 // Treo 650 has #Thumbnail dir that is not an album
                 if (dirInfo[i].attr & vfsFileAttrDirectory && strcmp(dirInfo[i].name, "#Thumbnail")) {
@@ -406,8 +406,8 @@ void fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const ch
  * Fetch the contents of one album and backup them if not existent.
  */
 void fetchAlbum(int sd, const unsigned volref, const char *root, const char *name) {
-    int maxDirItems = 1024;
-    VFSDirInfo dirInfo[maxDirItems];
+    int dirItems = 1024;
+    VFSDirInfo dirInfo[dirItems];
     char srcAlbumDir[strlen(root) + strlen(name) + 2];
     char *dstAlbumDir;
     FileRef dirRef;
@@ -433,23 +433,23 @@ void fetchAlbum(int sd, const unsigned volref, const char *root, const char *nam
     // Iterate over all the files in the album dir, looking for jpegs and 3gp's and 3g2's (videos).
     enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
     while (itr != vfsIteratorStop) {
-        //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &maxDirItems, dirInfo); // original code whithout checking error
-        jp_logf(L_DEBUG, "[%s]    Enumerate dir '%s', dirRef=%d, itr=%d, maxDirItems=%d\n", MYNAME, srcAlbumDir, dirRef, (int)itr, maxDirItems);
+        //dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfo); // original code whithout checking error
+        jp_logf(L_DEBUG, "[%s]    Enumerate dir '%s', dirRef=%d, itr=%d, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, (int)itr, dirItems);
         PI_ERR bytes;
         // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>, for alternative solution see at backupMedia().
-        if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, (unsigned long *)&itr, &maxDirItems, dirInfo)) < 0) {
+        if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, (unsigned long *)&itr, &dirItems, dirInfo)) < 0) {
             // Further research is neccessary:
-            // - Why in case of i.e. setting maxDirItems=4 it works on device, but not on SDCard?
+            // - Why in case of i.e. setting dirItems=4 it works on device, but not on SDCard?
             // - Why then on device itr==-1 even if there ar more files than 4?
             // - Why then on SDCard bytes is not negative, but operation freezes and logged: "caught signal SIGCHLD"?
             // - And why in latter case itr==1888, so out of allowed range?
-            jp_logf(L_FATAL, "[%s]    Enumerate ERROR: bytes=%d, itr=%d, maxDirItems=%d\n", MYNAME, bytes, (int)itr, maxDirItems);
+            jp_logf(L_FATAL, "[%s]    Enumerate ERROR: bytes=%d, itr=%d, dirItems=%d\n", MYNAME, bytes, (int)itr, dirItems);
             break;
         } else {
-            jp_logf(L_DEBUG, "[%s]    Enumerate OK: bytes=%d, itr=%d, maxDirItems=%d\n", MYNAME, bytes, (int)itr, maxDirItems);
+            jp_logf(L_DEBUG, "[%s]    Enumerate OK: bytes=%d, itr=%d, dirItems=%d\n", MYNAME, bytes, (int)itr, dirItems);
         }
         jp_logf(L_DEBUG, "[%s]    Now search for files to fetch ...\n", MYNAME);
-        for (int i=0; i<maxDirItems; i++) {
+        for (int i=0; i<dirItems; i++) {
             char *fname = dirInfo[i].name;
 
             jp_logf(L_DEBUG, "[%s]     Found file '%s' attribute %x\n", MYNAME, fname, dirInfo[i].attr);
