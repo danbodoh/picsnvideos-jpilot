@@ -10,8 +10,9 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Fixed bugs in volumeEnumerateIncludeHidden():
   If MAX_VOLUMES were reached, last volRef was overwritten by hidden volume ref.
   Set volRefs in correct order.
-* Fixed null pointer bug, if database could not be opened. 
-* Fetch and backup files immediately after album found. 
+* Fixed null pointer bug, if database could not be opened.
+* Fetch and backup files immediately after album found.
+* Got rid of using gdbm data base.
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>

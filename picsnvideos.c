@@ -34,8 +34,6 @@
 #include <pi-source.h>
 #include <pi-util.h>
 
-#include <gdbm.h>
-
 #include "libplugin.h"
 
 #define MYNAME "Pics&Videos Plugin"
@@ -44,7 +42,6 @@
 char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 
 #define PCDIR "PalmPictures"
-#define DATABASE_FILE "picsnvideos-fetched.gdbm"
 
 #define L_DEBUG JP_LOG_DEBUG
 #define L_GUI   JP_LOG_GUI
@@ -62,7 +59,6 @@ in your home directory.\n\
 For more documentation, bug reports and new versions,\n\
 see http://sourceforge.net/projects/picsnvideos";
 
-static GDBM_FILE gdbmfh;
 static const unsigned MAX_VOLUMES = 16;
 static const char *ROOTDIRS[] = {"/Photos & Videos", "/DCIM"};
 static const char UNFILED_ALBUM[] = "Unfiled";
@@ -125,13 +121,6 @@ int plugin_sync(int sd) {
         return -1;
     }
 
-    char gdbmfn[1024] = {""};
-    jp_get_home_file_name(DATABASE_FILE, gdbmfn, sizeof(gdbmfn-1));
-    if (!(gdbmfh = gdbm_open(gdbmfn, 0, GDBM_WRCREAT, 0600, NULL))) {
-        jp_logf(L_GUI, "[%s] WARNING: Failed to open DB '%s'\n", MYNAME, gdbmfn);
-    }
-
-
     // Scan all the volumes for media and backup them.
     int result = -1;
     for (int i=0; i<volcount; i++) {
@@ -183,7 +172,10 @@ int volumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
     }
     if (dlp_VFSVolumeInfo(sd, 1, &volInfo) > 0 && volInfo.attributes & vfsVolAttrHidden) {
         jp_logf(L_DEBUG, "[%s] Found hidden volume 1\n", MYNAME);
-        if (*numVols < MAX_VOLUMES)  (*numVols)++; // eventually discard last volRef
+        if (*numVols < MAX_VOLUMES)  (*numVols)++;
+        else {
+            jp_logf(L_FATAL, "[%s] Volumes > %d were discarded\n", MYNAME, MAX_VOLUMES);
+        }
         for (int i = (*numVols)-1; i > 0; i--) { // Move existing volRefs
             jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i-1, volRefs[i-1], i, volRefs[i]);
             volRefs[i] = volRefs[i-1];
@@ -320,7 +312,6 @@ void fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const ch
     char srcPath[strlen(root) + strlen(name) + strlen(file) + 10];
     FileRef fileRef;
     unsigned int filesize;
-    datum key, val;
 
     if (name == UNFILED_ALBUM) {
         sprintf(srcPath, "%s/%s", root, file);
@@ -335,24 +326,22 @@ void fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const ch
         jp_logf(L_GUI, "[%s]     Could not get file size '%s' on volume %d\n", MYNAME, srcPath, volref);
         return;
     }
-    // Create a key for the picsandvideos-fetched DB.
-    if ((key.dptr = mallocLog(strlen(file) + 16))) {
-        sprintf(key.dptr, "%s:%d", file, filesize);
-        key.dsize = strlen(key.dptr);
-    }
 
-    if (gdbmfh && key.dptr && gdbm_exists(gdbmfh, key)) {
-        jp_logf(L_DEBUG, "[%s]     Key '%s' exists in DB, not copying file\n", MYNAME, key.dptr);
-    } else { // If file has not already been downloaded, fetch it.
-        char dstfile[strlen(dstDir) + strlen(file) + 10];
-        FILE *fp;
+    char dstfile[strlen(dstDir) + strlen(file) + 1];
+    // Get full destination file path.
+    strcpy(dstfile,dstDir);
+    strcat(dstfile,file);
+    struct stat fstat;
+    int statErr = stat(dstfile, &fstat);
 
-        if (!gdbmfh || !key.dptr) {
-            jp_logf(L_GUI, "[%s]     WARNING: Failed to access DB\n", MYNAME);
+    if (!statErr && fstat.st_size == filesize) {
+        jp_logf(L_DEBUG, "[%s]     File '%s' already exists, not copying it\n", MYNAME, dstfile);
+    } else { // If file has not already been backuped, fetch it.
+        if (!statErr) {
+            jp_logf(L_DEBUG, "[%s]     File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstfile, fstat.st_size, filesize);
         }
         // Open destination file.
-        strcpy(dstfile,dstDir);
-        strcat(dstfile,file);
+        FILE *fp;
         jp_logf(L_GUI,"[%s]     Fetching %s ...\n", MYNAME, dstfile);
         if (!(fp = fopen(dstfile,"w"))) {
             jp_logf(L_FATAL, "[%s]      Cannot open %s for writing!\n", MYNAME, dstfile);
@@ -391,18 +380,6 @@ void fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const ch
         if (errorDuringFetch) {
             unlink(dstfile); // remove the partially created file
         } else {
-            // Inform DB, that file has been fetched.
-            val.dptr = "";
-            val.dsize = 1;
-            if (gdbmfh && key.dptr) {
-                if (gdbm_store(gdbmfh, key, val, GDBM_REPLACE)) {
-                    jp_logf(L_GUI, "[%s]      WARNING: Failed to add key '%s' to DB\n", MYNAME, key.dptr);
-                } else {
-                    jp_logf(L_DEBUG, "[%s]      Key '%s' added to DBn", MYNAME, key.dptr);
-                }
-            } else {
-                jp_logf(L_GUI, "[%s]     WARNING: Failed to access DB\n", MYNAME);
-            }
 #ifdef HAVE_UTIME
             int status;
             time_t date;
@@ -422,7 +399,6 @@ void fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const ch
 #endif // HAVE_UTIME
         }
     }
-    free(key.dptr);
     dlp_VFSFileClose(sd, fileRef);
 }
 
