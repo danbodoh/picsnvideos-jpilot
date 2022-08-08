@@ -17,8 +17,6 @@ LT_INIT
 AC_PROG_INSTALL
 
 # Checks for libraries.
-AC_CHECK_LIB(gdbm, main, LIBS="$libs -lgdbm",
- AC_MSG_ERROR([*** GDBM not installed - please install first ***]))
 
 # Checks for header files.
 m4_warn([obsolete],
