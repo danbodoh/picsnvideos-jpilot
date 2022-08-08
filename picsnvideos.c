@@ -225,12 +225,14 @@ int backupMedia(int sd, int volref) {
         // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
         unsigned long itr = (unsigned long)vfsIteratorStart;
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
-            int dirItems = 1024;
+            int dirItems = 4;
             VFSDirInfo dirInfos[dirItems];
             jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, (int)itr, dirItems);
             PI_ERR bytes;
             if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
-                // Further research is neccessary, see fetchAlbum():
+                // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
+                // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
+                // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
                 jp_logf(L_FATAL, "[%s]  Enumerate ERROR: bytes=%d, dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, bytes, dirRef, (int)itr, dirItems);
                 break;
             } else {
@@ -430,19 +432,19 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
     jp_logf(L_GUI, "[%s]   Fetching album '%s' in '%s' on volume %d ...\n", MYNAME, name, root, volref);
 
     // Iterate over all the files in the album dir, looking for jpegs and 3gp's and 3g2's (videos).
+    
     // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
     unsigned long itr = (unsigned long)vfsIteratorStart;
-    
     int loops = 16; // for debugging
-    for (int dirItems_backup; (dirItems_backup = dirItems) <= MAX_DIR_ITEMS; dirItems *= 2) {
     //while (itr != (unsigned long)vfsIteratorStop) {
+    for (int dirItems_backup; (dirItems_backup = dirItems) <= MAX_DIR_ITEMS; dirItems *= 2) { // WORKAROUND
         if (--loops < 0)  break; // for debugging
         PI_ERR bytes;
         itr = (unsigned long)vfsIteratorStart; // workaround, if itr was -1 or 1888
         jp_logf(L_DEBUG, "[%s]    Enumerate album '%s', dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, (int)itr, dirItems);
         if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
-            // Further research is neccessary:
-            // - Why in case of i.e. setting dirItems=4, itr != 0 even if there are more than 4 files?
+            // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
+            // - Why in case of i.e. setting dirItems=4, itr != 0, even if there are more than 4 files?
             // - Why on SDCard itr == 1888, so out of allowed range?
             // - Why then on SDCard bytes is not negative, but operation freezes and logged: "caught signal SIGCHLD"?
             jp_logf(L_FATAL, "[%s]    Enumerate ERROR: bytes=%d, dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, bytes, dirRef, (int)itr, dirItems);
