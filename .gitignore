@@ -6,6 +6,7 @@
 .*.swp
 *.out
 *.bak
+*.zip
 
 # IDE files to ignore (Netbeans, Eclipse)
 nbproject/private/
