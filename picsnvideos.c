@@ -44,8 +44,10 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 #define PCDIR "PalmPictures"
 
 #define L_DEBUG JP_LOG_DEBUG
-#define L_GUI   JP_LOG_GUI
+#define L_INFO  JP_LOG_INFO
+#define L_WARN  JP_LOG_WARN
 #define L_FATAL JP_LOG_FATAL
+#define L_GUI   JP_LOG_GUI
 
 static const char HELP_TEXT[] =
 "JPilot plugin (c) 2008 by Dan Bodoh\n\
@@ -225,7 +227,7 @@ int backupMedia(int sd, int volref) {
         // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
         unsigned long itr = (unsigned long)vfsIteratorStart;
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
-            int dirItems = 4;
+            int dirItems = 1024;
             VFSDirInfo dirInfos[dirItems];
             jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, (int)itr, dirItems);
             PI_ERR bytes;
@@ -268,10 +270,8 @@ int createDir(char *path, const char *dir) {
 }
 
 /*
- * Return directory name on the PC, where the album
- * should be stored. Returned string is of the form
- * "/home/danb/PalmPictures/Album/". Directories in
- * the path are created as needed.
+ * Return directory name on the PC, where the album should be stored. Returned string is of the form
+ * "/home/danb/PalmPictures/Album/". Directories in the path are created as needed.
  * Null is returned if out of memory.
  * Caller should free return value.
  */
@@ -316,7 +316,7 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
 int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const char *name, char *file, char *dstDir) {
     char srcPath[strlen(root) + strlen(name) + strlen(file) + 3];
     FileRef fileRef;
-    unsigned int filesize;
+    int filesize; // also serves as error return code
 
     if (name == UNFILED_ALBUM) {
         sprintf(srcPath, "%s/%s", root, file);
@@ -325,21 +325,17 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
     }
     
     if (dlp_VFSFileOpen(sd, volref, srcPath, vfsModeRead, &fileRef) < 0) {
-          jp_logf(L_GUI, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
+          jp_logf(L_FATAL, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
           return -1;
     }
     if (dlp_VFSFileSize(sd, fileRef, (int *)(&filesize)) < 0) {
-        jp_logf(L_GUI, "[%s]     Could not get file size '%s' on volume %d\n", MYNAME, srcPath, volref);
-        return -1;
+        jp_logf(L_WARN, "[%s]     WARNING: Could not get size of '%s' on volume %d, so anyway fetch it.\n", MYNAME, srcPath, volref);
     }
 
     char dstfile[strlen(dstDir) + strlen(file) + 1];
-    // Get full destination file path.
-    strcpy(dstfile,dstDir);
-    strcat(dstfile,file);
+    strcat(strcpy(dstfile, dstDir), file); // Build full destination file path.
     struct stat fstat;
     int statErr = stat(dstfile, &fstat);
-
     if (!statErr && fstat.st_size == filesize) {
         jp_logf(L_DEBUG, "[%s]     File '%s' already exists, not copying it\n", MYNAME, dstfile);
     } else { // If file has not already been backuped, fetch it.
@@ -348,40 +344,30 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
         }
         // Open destination file.
         FILE *fp;
-        jp_logf(L_GUI, "[%s]     Fetching %s ...\n", MYNAME, dstfile);
+        jp_logf(L_INFO, "[%s]     Fetching %s ...\n", MYNAME, dstfile);
         if (!(fp = fopen(dstfile, "w"))) {
             jp_logf(L_FATAL, "[%s]      Cannot open %s for writing!\n", MYNAME, dstfile);
             return -1;
         }
-
-        // This copy code is based on pilot-xfer.c by Kenneth Albanowski.
-        PI_ERR readsize = 0, writesize = 0;
-        const unsigned int buffersize = 65536;
-        pi_buffer_t *buffer = pi_buffer_new(buffersize);
-        while ((filesize > 0) && (readsize >= 0)) {
-            int offset;
-            pi_buffer_clear(buffer);
-            readsize = dlp_VFSFileRead(sd, fileRef, buffer, (filesize > buffersize ? buffersize : filesize));
-            if (readsize < 0)  {
+        // Copy file.
+        for (pi_buffer_t *buf = pi_buffer_new(65536); filesize > 0; filesize -= buf->used) {
+            pi_buffer_clear(buf);
+            if (dlp_VFSFileRead(sd, fileRef, buf, (filesize > buf->allocated ? buf->allocated : filesize)) < 0)  {
+            //if (dlp_VFSFileRead(sd, fileRef, buf, buf->allocated) < 0)  { // works too, but is very slow
                 jp_logf(L_FATAL, "[%s]      File read error; aborting\n", MYNAME);
+                filesize = -1; // remember error
                 break;
             }
-            filesize -= readsize;
-
-            offset = 0;
-            while (readsize > 0) {
-                writesize = fwrite(buffer->data+offset, 1, readsize, fp);
-                if (writesize < 0) {
+            for (int writesize, offset = 0; offset < buf->used; offset += writesize) {
+                if ((writesize = fwrite(buf->data + offset, 1, buf->used - offset, fp)) < 0) {
                     jp_logf(L_FATAL, "[%s]      File write error; aborting\n", MYNAME);
+                    filesize = writesize; // remember error; breaks the outer loop
                     break;
                 }
-                readsize -= writesize;
-                offset += writesize;
             }
         }
         fclose(fp);
-
-        if (readsize < 0 || writesize < 0) {
+        if (filesize < 0) {
             unlink(dstfile); // remove the partially created file
         } else {
 #ifdef HAVE_UTIME
@@ -389,7 +375,7 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
             statErr = 0;
             // Get the date that the picture was created (not the file), aka modified time.
             if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
-                jp_logf(L_GUI, "[%s]     WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
+                jp_logf(L_WARN, "[%s]     WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
             // And set the destination file modified time to that date.
             } else if (!(statErr = stat(dstfile, &fstat))) {
                 struct utimbuf utim;
@@ -398,13 +384,13 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
                 statErr = utime(dstfile, &utim);
             }
             if (statErr) {
-                jp_logf(L_GUI, "[%s]     WARNING: Cannot set date of file '%s'\n", MYNAME, dstfile);
+                jp_logf(L_WARN, "[%s]     WARNING: Cannot set date of file '%s'\n", MYNAME, dstfile);
             }
 #endif // HAVE_UTIME
         }
     }
     dlp_VFSFileClose(sd, fileRef);
-    return 0;
+    return filesize;
 }
 
 /*
