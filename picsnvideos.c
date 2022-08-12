@@ -213,7 +213,7 @@ int backupMedia(int sd, int volref) {
 
         // Fetch the unfiled album, which is simply the root dir.
         // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
-        result = fetchAlbum(sd, volref, ROOTDIRS[d], UNFILED_ALBUM);
+        result = fetchAlbum(sd, volref, ROOTDIRS[d], NULL);
 
         // Iterate through the root directory, looking for things that might be albums.
         FileRef dirRef;
@@ -284,7 +284,7 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
 
     // Use $HOME, or current directory if it is not defined.
     if (!(home = getenv("HOME"))) {
-        home = "./";
+        home = ".";
     }
 
     // Next level is indicator of which card.
@@ -301,11 +301,11 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
         sprintf(card, "card%d", volInfo.slotRefNum);
     }
 
-    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(name) + 5))) {
+    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(name ? name : UNFILED_ALBUM) + 5))) {
         return dst;
     }
     // Create album directory if not existent.
-    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || createDir(dst, name)) {
+    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || createDir(dst, name ? name : UNFILED_ALBUM)) {
         free(dst);
         return NULL;
     }
@@ -315,16 +315,12 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
 /*
  * Fetch a file and backup it if not existent.
  */
-int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const char *name, char *file, char *dstDir) {
-    char srcPath[strlen(root) + strlen(name) + strlen(file) + 3];
+int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const char *dstDir, const char *file) {
+    char srcPath[strlen(srcDir) + strlen(file) + 2];
     FileRef fileRef;
     int filesize; // also serves as error return code
 
-    if (name == UNFILED_ALBUM) {
-        sprintf(srcPath, "%s/%s", root, file);
-    } else {
-        sprintf(srcPath, "%s/%s/%s", root, name, file);
-    }
+    sprintf(srcPath, "%s/%s", srcDir, file);
     
     if (dlp_VFSFileOpen(sd, volref, srcPath, vfsModeRead, &fileRef) < 0) {
           jp_logf(L_FATAL, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
@@ -334,21 +330,21 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
         jp_logf(L_WARN, "[%s]     WARNING: Could not get size of '%s' on volume %d, so anyway fetch it.\n", MYNAME, srcPath, volref);
     }
 
-    char dstfile[strlen(dstDir) + strlen(file) + 1];
-    strcat(strcpy(dstfile, dstDir), file); // Build full destination file path.
+    char dstPath[strlen(dstDir) + strlen(file) + 1];
+    strcat(strcpy(dstPath, dstDir), file); // Build full destination file path.
     struct stat fstat;
-    int statErr = stat(dstfile, &fstat);
+    int statErr = stat(dstPath, &fstat);
     if (!statErr && fstat.st_size == filesize) {
-        jp_logf(L_DEBUG, "[%s]     File '%s' already exists, not copying it\n", MYNAME, dstfile);
+        jp_logf(L_DEBUG, "[%s]     File '%s' already exists, not copying it\n", MYNAME, dstPath);
     } else { // If file has not already been backuped, fetch it.
         if (!statErr) {
-            jp_logf(L_DEBUG, "[%s]     File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstfile, fstat.st_size, filesize);
+            jp_logf(L_DEBUG, "[%s]     File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstPath, fstat.st_size, filesize);
         }
         // Open destination file.
         FILE *fp;
-        jp_logf(L_INFO, "[%s]     Fetching %s ...\n", MYNAME, dstfile);
-        if (!(fp = fopen(dstfile, "w"))) {
-            jp_logf(L_FATAL, "[%s]      Cannot open %s for writing!\n", MYNAME, dstfile);
+        jp_logf(L_INFO, "[%s]     Fetching %s ...\n", MYNAME, dstPath);
+        if (!(fp = fopen(dstPath, "w"))) {
+            jp_logf(L_FATAL, "[%s]      Cannot open %s for writing!\n", MYNAME, dstPath);
             return -1;
         }
         // Copy file.
@@ -370,7 +366,7 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
         }
         fclose(fp);
         if (filesize < 0) {
-            unlink(dstfile); // remove the partially created file
+            unlink(dstPath); // remove the partially created file
         } else {
 #ifdef HAVE_UTIME
             time_t date;
@@ -379,14 +375,14 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
             if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
                 jp_logf(L_WARN, "[%s]     WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
             // And set the destination file modified time to that date.
-            } else if (!(statErr = stat(dstfile, &fstat))) {
+            } else if (!(statErr = stat(dstPath, &fstat))) {
                 struct utimbuf utim;
                 utim.actime = (time_t)fstat.st_atime;
                 utim.modtime = date;
-                statErr = utime(dstfile, &utim);
+                statErr = utime(dstPath, &utim);
             }
             if (statErr) {
-                jp_logf(L_WARN, "[%s]     WARNING: Cannot set date of file '%s'\n", MYNAME, dstfile);
+                jp_logf(L_WARN, "[%s]     WARNING: Cannot set date of file '%s'\n", MYNAME, dstPath);
             }
 #endif // HAVE_UTIME
         }
@@ -399,7 +395,7 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
  * Fetch the contents of one album and backup them if not existent.
  */
 int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name) {
-    char tmp[strlen(root) + strlen(name) + 2];
+    char tmp[name ? (strlen(root) + strlen(name) + 2) : 0];
     char *srcAlbumDir, *dstAlbumDir;
     FileRef dirRef;
     int dirItems;
@@ -407,7 +403,7 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
     PI_ERR result = 0;
 
     // Unfiled album may be really just root dir (this happens on Treo 65O) or album is in /<root>/<name>.
-    srcAlbumDir = (name == UNFILED_ALBUM) ? (char *)root : strcat(strcat(strcpy(tmp ,root), "/"), name);
+    srcAlbumDir = name ? strcat(strcat(strcpy(tmp ,root), "/"), name) : (char *)root;
     
     if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef) < 0) {
         jp_logf(L_GUI, "[%s]   Could not open %s '%s' on volume %d\n", MYNAME, (srcAlbumDir == root) ? "root" : "dir", srcAlbumDir, volref);
@@ -456,7 +452,7 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
                 vfsFileAttrVolumeLabel |
                 vfsFileAttrDirectory   |
                 vfsFileAttrLink) ||
-                strlen(name) < 5 || (
+                strlen(fname) < 4 || (
                 //strcasecmp(ext, ".thb") &&  // thumbnail from album #Thumbnail (Treo 650)
                 //strcasecmp(ext+1, ".db") && // DB file
                 strcasecmp(ext, ".jpg") &&  // JPEG picture
@@ -466,7 +462,7 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
                 strcasecmp(ext, ".qcp"))) { // audio caption (CDMA phones)
             continue;
         }
-        if (fetchFileIfNeeded(sd, volref, root, name, fname, dstAlbumDir) < 0) {
+        if (fetchFileIfNeeded(sd, volref, srcAlbumDir, dstAlbumDir, fname) < 0) {
             result = -1;
         }
     }
