@@ -116,20 +116,22 @@ int plugin_sync(int sd) {
     int volrefs[MAX_VOLUMES];
     int volumes = MAX_VOLUMES;
 
-    jp_logf(L_GUI, "Fetching %s\n", MYNAME);
+    jp_logf(L_INFO, "Fetching %s ...\n", MYNAME);
     jp_logf(L_DEBUG, "picsnvideos version %s (%s)\n", VERSION, rcsid);
 
     // Get list of the volumes on the pilot.
     if (volumeEnumerateIncludeHidden(sd, &volumes, volrefs) < 0) {
-        jp_logf(L_GUI, "[%s] Could not find any VFS volumes; no pictures fetched\n", MYNAME);
+        jp_logf(L_FATAL, "[%s] ERROR: Could not find any VFS volumes; no pictures fetched\n", MYNAME);
         return -1;
     }
 
     // Scan all the volumes for media and backup them.
-    int result = -1;
+    PI_ERR result = -1;
     for (int i=0; i<volumes; i++) {
-        if (backupMedia(sd, volrefs[i])) {
-            jp_logf(L_GUI, "[%s] Could not find any media root on volume %d; no pictures fetched\n", MYNAME, volrefs[i]);
+        PI_ERR volResult;
+        if ((volResult = backupMedia(sd, volrefs[i]))) {
+            jp_logf(L_WARN, "[%s] WARNING: Could not find any media on volume %d; no pictures fetched\n", MYNAME, volrefs[i]);
+            jp_logf(L_DEBUG, "[%s] Result from volume %d: %d\n", MYNAME, volrefs[i], volResult);
             continue;
         }
         result = 0;
@@ -156,19 +158,19 @@ int plugin_sync(int sd) {
  *
  ***********************************************************************/
 int volumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
-    PI_ERR   bytes;
+    PI_ERR   result;
     VFSInfo  volInfo;
 
-    // bytes on Treo 650:
+    // result on Treo 650:
     // -301 : No volume (SDCard) found, but maybe hidden volume 1 exists
     //    4 : At least one volume found, but maybe additional hidden volume 1 exists
-    bytes = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
-    jp_logf(L_DEBUG, "[%s] dlp_VFSVolumeEnumerate result code %d, found %d volumes\n", MYNAME, bytes, *numVols);
+    result = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
+    jp_logf(L_DEBUG, "[%s] dlp_VFSVolumeEnumerate result code %d, found %d volumes\n", MYNAME, result, *numVols);
     // On the Centro, Treo 650 and maybe more, it appears that the
     // first non-hidden volRef is 2, and the hidden volRef is 1.
     // Let's poke around to see, if there is really a volRef 1
     // that's hidden from the dlp_VFSVolumeEnumerate().
-    if (bytes < 0)  *numVols = 0; // On Error reset numVols
+    if (result < 0)  *numVols = 0; // On Error reset numVols
     for (int i=0; i<*numVols; i++) { // Search for volume 1
         jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i, volRefs[i]);
         if (volRefs[i]==1)
@@ -185,12 +187,12 @@ int volumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
             volRefs[i] = volRefs[i-1];
         }
         volRefs[0] = 1;
-        if (bytes < 0)
-            bytes = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
+        if (result < 0)
+            result = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
     }
 Exit:
-    jp_logf(L_DEBUG, "[%s] volumeEnumerate final result code %d, found %d volumes\n", MYNAME, bytes, *numVols);
-    return bytes;
+    jp_logf(L_DEBUG, "[%s] volumeEnumerate final result code %d, found %d volumes\n", MYNAME, result, *numVols);
+    return result;
 }
 
 void *mallocLog(size_t size) {
@@ -204,16 +206,14 @@ void *mallocLog(size_t size) {
  *  Backup all albums from volume volref.
  */
 int backupMedia(int sd, int volref) {
-    int result = -1;
+    PI_ERR rootResult = -3, result = 0;
 
     jp_logf(L_DEBUG, "[%s] Searching roots on volume %d\n", MYNAME, volref);
     for (int d = 0; d < sizeof(ROOTDIRS)/sizeof(*ROOTDIRS); d++) {
 
         // Fetch the unfiled album, which is simply the root dir.
         // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
-        if (!fetchAlbum(sd, volref, ROOTDIRS[d], UNFILED_ALBUM)) {
-            result = 0;
-        }
+        result = fetchAlbum(sd, volref, ROOTDIRS[d], UNFILED_ALBUM);
 
         // Iterate through the root directory, looking for things that might be albums.
         FileRef dirRef;
@@ -222,23 +222,25 @@ int backupMedia(int sd, int volref) {
             continue;
         }
         jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, ROOTDIRS[d], volref);
-        result = 0;
+        rootResult = 0;
 
-        // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
+        //enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
+        //while (itr != vfsIteratorStop) { // doesn't work because of type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
         unsigned long itr = (unsigned long)vfsIteratorStart;
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
             int dirItems = 1024;
             VFSDirInfo dirInfos[dirItems];
-            jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, (int)itr, dirItems);
-            PI_ERR bytes;
-            if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
+            jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
+            PI_ERR enRes;
+            if ((enRes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
                 // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
                 // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
                 // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
-                jp_logf(L_FATAL, "[%s]  Enumerate ERROR: bytes=%d, dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, bytes, dirRef, (int)itr, dirItems);
+                jp_logf(L_FATAL, "[%s]  Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                result -= 3;
                 break;
             } else {
-                jp_logf(L_DEBUG, "[%s]  Enumerate OK: bytes=%d, dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, bytes, dirRef, (int)itr, dirItems);
+                jp_logf(L_DEBUG, "[%s]  Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
             }
             jp_logf(L_DEBUG, "[%s]  Now search for albums to fetch ...\n", MYNAME);
             for (int i=0; i<dirItems; i++) {
@@ -247,13 +249,13 @@ int backupMedia(int sd, int volref) {
                 if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
                 //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
                     jp_logf(L_DEBUG, "[%s]   Found real album '%s'\n", MYNAME,  dirInfos[i].name);
-                    fetchAlbum(sd, volref, ROOTDIRS[d], dirInfos[i].name);
+                    result += fetchAlbum(sd, volref, ROOTDIRS[d], dirInfos[i].name);
                 }
             }
         }
         dlp_VFSFileClose(sd, dirRef);
     }
-    return result;
+    return rootResult + result;
 }
 
 int createDir(char *path, const char *dir) {
@@ -397,54 +399,53 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *root, const cha
  * Fetch the contents of one album and backup them if not existent.
  */
 int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name) {
-    int dirItems = MIN_DIR_ITEMS;
-    VFSDirInfo dirInfos[MAX_DIR_ITEMS];
     char tmp[strlen(root) + strlen(name) + 2];
     char *srcAlbumDir, *dstAlbumDir;
     FileRef dirRef;
+    int dirItems;
+    VFSDirInfo dirInfos[MAX_DIR_ITEMS];
+    PI_ERR result = 0;
 
-    //strcpy(srcAlbumDir, root); // Album is in /<root>/<name>.
-    // Unfiled album is really just root dir; this happens on Treo 65O.
+    // Unfiled album may be really just root dir (this happens on Treo 65O) or album is in /<root>/<name>.
     srcAlbumDir = (name == UNFILED_ALBUM) ? (char *)root : strcat(strcat(strcpy(tmp ,root), "/"), name);
     
     if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef) < 0) {
         jp_logf(L_GUI, "[%s]   Could not open %s '%s' on volume %d\n", MYNAME, (srcAlbumDir == root) ? "root" : "dir", srcAlbumDir, volref);
-        return -1;
+        return -2;
     }
     if (!(dstAlbumDir = destinationDir(sd, volref, name))) {
         jp_logf(L_GUI, "[%s]   Could not open dir '%s'\n", MYNAME, dstAlbumDir);
-        return -1;
+        result = -2;
+        goto Exit;
     }
     jp_logf(L_GUI, "[%s]   Fetching album '%s' in '%s' on volume %d ...\n", MYNAME, name, root, volref);
 
     // Iterate over all the files in the album dir, looking for jpegs and 3gp's and 3g2's (videos).
-    
-    // Workaround type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
     unsigned long itr = (unsigned long)vfsIteratorStart;
+    //enum dlpVFSFileIteratorConstants itr = vfsIteratorStart; // doesn't work because of type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
     int loops = 16; // for debugging
-    //while (itr != (unsigned long)vfsIteratorStop) {
-    for (int dirItems_backup; (dirItems_backup = dirItems) <= MAX_DIR_ITEMS; dirItems *= 2) { // WORKAROUND
+    //while (itr != (unsigned long)vfsIteratorStop) { // doesn't work because of bug <https://github.com/juddmon/jpilot/issues/39>
+    //while (itr != (unsigned)vfsIteratorStop) { // doesn't work because of bug <https://github.com/juddmon/jpilot/issues/41>
+    for (int dirItems_init = MIN_DIR_ITEMS; (dirItems = dirItems_init) <= MAX_DIR_ITEMS; dirItems_init *= 2) { // WORKAROUND
         if (--loops < 0)  break; // for debugging
-        PI_ERR bytes;
-        itr = (unsigned long)vfsIteratorStart; // workaround, if itr was -1 or 1888
-        jp_logf(L_DEBUG, "[%s]    Enumerate album '%s', dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, (int)itr, dirItems);
-        if ((bytes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
-            // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
+        jp_logf(L_DEBUG, "[%s]    Enumerate album '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
+        itr = (unsigned long)vfsIteratorStart; // workaround, reset itr if it wrongly was -1 or 1888
+        if ((result = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
+            // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41>):
             // - Why in case of i.e. setting dirItems=4, itr != 0, even if there are more than 4 files?
-            // - Why on SDCard itr == 1888, so out of allowed range?
-            // - Why then on SDCard bytes is not negative, but operation freezes and logged: "caught signal SIGCHLD"?
-            jp_logf(L_FATAL, "[%s]    Enumerate ERROR: bytes=%d, dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, bytes, dirRef, (int)itr, dirItems);
+            // - Why then on SDCard itr == 1888 in the first loop, so out of allowed range?
+            jp_logf(L_FATAL, "[%s]    Enumerate ERROR: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+            dirItems = 0; // skip file search
             break;
         }
-        jp_logf(L_DEBUG, "[%s]    Enumerate OK: bytes=%d, dirRef=%lu, itr=%d, dirItems=%d\n", MYNAME, bytes, dirRef, (int)itr, dirItems);
-        if (dirItems < dirItems_backup) {
+        jp_logf(L_DEBUG, "[%s]    Enumerate OK: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+        if (dirItems < dirItems_init) {
             break;
         }
     }
     jp_logf(L_DEBUG, "[%s]    Now search of %d files, which to fetch ...\n", MYNAME, dirItems);
     for (int i=0; i<dirItems; i++) {
         char *fname = dirInfos[i].name;
-
         jp_logf(L_DEBUG, "[%s]     Found file '%s' attribute %x\n", MYNAME, fname, dirInfos[i].attr);
         // Grab only regular files, but ignore the 'read only' and 'archived' bits,
         // and only with known extensions.
@@ -465,9 +466,12 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
                 strcasecmp(ext, ".qcp"))) { // audio caption (CDMA phones)
             continue;
         }
-        fetchFileIfNeeded(sd, volref, root, name, fname, dstAlbumDir);
+        if (fetchFileIfNeeded(sd, volref, root, name, fname, dstAlbumDir) < 0) {
+            result = -1;
+        }
     }
-    dlp_VFSFileClose(sd, dirRef);
     free(dstAlbumDir);
-    return 0;
+Exit:
+    dlp_VFSFileClose(sd, dirRef);
+    return result;
 }
