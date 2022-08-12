@@ -259,8 +259,7 @@ int backupMedia(int sd, int volref) {
 }
 
 int createDir(char *path, const char *dir) {
-    strcat(path, "/");
-    strcat(path, dir);
+    strcat(strcat(path, "/"), dir);
     int result;
     if ((result = mkdir(path, 0777))) {
         if (errno != EEXIST) {
@@ -301,7 +300,7 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
         sprintf(card, "card%d", volInfo.slotRefNum);
     }
 
-    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(name ? name : UNFILED_ALBUM) + 5))) {
+    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(name ? name : UNFILED_ALBUM) + 4))) {
         return dst;
     }
     // Create album directory if not existent.
@@ -309,7 +308,7 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
         free(dst);
         return NULL;
     }
-    return strcat(dst, "/"); // must be free'd by caller
+    return dst; // must be free'd by caller
 }
 
 /*
@@ -317,10 +316,12 @@ char *destinationDir(int sd, const unsigned volref, const char *name) {
  */
 int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const char *dstDir, const char *file) {
     char srcPath[strlen(srcDir) + strlen(file) + 2];
+    char dstPath[strlen(dstDir) + strlen(file) + 2];
     FileRef fileRef;
     int filesize; // also serves as error return code
 
-    sprintf(srcPath, "%s/%s", srcDir, file);
+    strcat(strcat(strcpy(srcPath, srcDir), "/"), file);
+    strcat(strcat(strcpy(dstPath, dstDir), "/"), file);
     
     if (dlp_VFSFileOpen(sd, volref, srcPath, vfsModeRead, &fileRef) < 0) {
           jp_logf(L_FATAL, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
@@ -330,8 +331,6 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
         jp_logf(L_WARN, "[%s]     WARNING: Could not get size of '%s' on volume %d, so anyway fetch it.\n", MYNAME, srcPath, volref);
     }
 
-    char dstPath[strlen(dstDir) + strlen(file) + 1];
-    strcat(strcpy(dstPath, dstDir), file); // Build full destination file path.
     struct stat fstat;
     int statErr = stat(dstPath, &fstat);
     if (!statErr && fstat.st_size == filesize) {
@@ -370,7 +369,6 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
         } else {
 #ifdef HAVE_UTIME
             time_t date;
-            statErr = 0;
             // Get the date that the picture was created (not the file), aka modified time.
             if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
                 jp_logf(L_WARN, "[%s]     WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
