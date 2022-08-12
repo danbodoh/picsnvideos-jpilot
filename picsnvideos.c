@@ -340,9 +340,9 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
             jp_logf(L_DEBUG, "[%s]     File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstPath, fstat.st_size, filesize);
         }
         // Open destination file.
-        FILE *fp;
+        FILE *dstFp;
         jp_logf(L_INFO, "[%s]     Fetching %s ...\n", MYNAME, dstPath);
-        if (!(fp = fopen(dstPath, "w"))) {
+        if (!(dstFp = fopen(dstPath, "w"))) {
             jp_logf(L_FATAL, "[%s]      Cannot open %s for writing!\n", MYNAME, dstPath);
             return -1;
         }
@@ -356,14 +356,14 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
                 break;
             }
             for (int writesize, offset = 0; offset < buf->used; offset += writesize) {
-                if ((writesize = fwrite(buf->data + offset, 1, buf->used - offset, fp)) < 0) {
+                if ((writesize = fwrite(buf->data + offset, 1, buf->used - offset, dstFp)) < 0) {
                     jp_logf(L_FATAL, "[%s]      File write error; aborting\n", MYNAME);
                     filesize = writesize; // remember error; breaks the outer loop
                     break;
                 }
             }
         }
-        fclose(fp);
+        fclose(dstFp);
         if (filesize < 0) {
             unlink(dstPath); // remove the partially created file
         } else {
@@ -372,6 +372,7 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
             // Get the date that the picture was created (not the file), aka modified time.
             if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
                 jp_logf(L_WARN, "[%s]     WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
+                statErr = 0; // reset old state
             // And set the destination file modified time to that date.
             } else if (!(statErr = stat(dstPath, &fstat))) {
                 struct utimbuf utim;
