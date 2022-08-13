@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <utime.h>
@@ -44,7 +45,7 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 #define PCDIR "PalmPictures"
 
 #define L_DEBUG JP_LOG_DEBUG
-#define L_INFO  JP_LOG_INFO
+#define L_INFO  JP_LOG_INFO // Unfortunately doesn't show in GUI
 #define L_WARN  JP_LOG_WARN
 #define L_FATAL JP_LOG_FATAL
 #define L_GUI   JP_LOG_GUI
@@ -116,7 +117,7 @@ int plugin_sync(int sd) {
     int volrefs[MAX_VOLUMES];
     int volumes = MAX_VOLUMES;
 
-    jp_logf(L_INFO, "Fetching %s ...\n", MYNAME);
+    jp_logf(L_GUI, "Fetching %s ...\n", MYNAME);
     jp_logf(L_DEBUG, "picsnvideos version %s (%s)\n", VERSION, rcsid);
 
     // Get list of the volumes on the pilot.
@@ -129,7 +130,7 @@ int plugin_sync(int sd) {
     PI_ERR result = -1;
     for (int i=0; i<volumes; i++) {
         PI_ERR volResult;
-        if ((volResult = backupMedia(sd, volrefs[i]))) {
+        if ((volResult = backupMedia(sd, volrefs[i])) < 0) {
             jp_logf(L_WARN, "[%s] WARNING: Could not find any media on volume %d; no pictures fetched\n", MYNAME, volrefs[i]);
             jp_logf(L_DEBUG, "[%s] Result from volume %d: %d\n", MYNAME, volrefs[i], volResult);
             continue;
@@ -208,21 +209,21 @@ void *mallocLog(size_t size) {
 int backupMedia(int sd, int volref) {
     PI_ERR rootResult = -3, result = 0;
 
-    jp_logf(L_DEBUG, "[%s] Searching roots on volume %d\n", MYNAME, volref);
+    jp_logf(L_DEBUG, "[%s]  Searching roots on volume %d\n", MYNAME, volref);
     for (int d = 0; d < sizeof(ROOTDIRS)/sizeof(*ROOTDIRS); d++) {
-
-        // Fetch the unfiled album, which is simply the root dir.
-        // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
-        result = fetchAlbum(sd, volref, ROOTDIRS[d], NULL);
 
         // Iterate through the root directory, looking for things that might be albums.
         FileRef dirRef;
         if (dlp_VFSFileOpen(sd, volref, ROOTDIRS[d], vfsModeRead, &dirRef) < 0) {
-            jp_logf(L_DEBUG, "[%s]  Root '%s' does not exist on volume %d\n", MYNAME, ROOTDIRS[d], volref);
+            jp_logf(L_DEBUG, "[%s]   Root '%s' does not exist on volume %d\n", MYNAME, ROOTDIRS[d], volref);
             continue;
         }
-        jp_logf(L_DEBUG, "[%s]  Opened root '%s' on volume %d\n", MYNAME, ROOTDIRS[d], volref);
+        jp_logf(L_DEBUG, "[%s]   Opened root '%s' on volume %d\n", MYNAME, ROOTDIRS[d], volref);
         rootResult = 0;
+
+        // Fetch the unfiled album, which is simply the root dir.
+        // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
+        result = fetchAlbum(sd, volref, ROOTDIRS[d], NULL);
 
         //enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
         //while (itr != vfsIteratorStop) { // doesn't work because of type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
@@ -230,31 +231,32 @@ int backupMedia(int sd, int volref) {
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
             int dirItems = 1024;
             VFSDirInfo dirInfos[dirItems];
-            jp_logf(L_DEBUG, "[%s]  Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
+            jp_logf(L_DEBUG, "[%s]   Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
             PI_ERR enRes;
             if ((enRes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
                 // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
                 // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
                 // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
-                jp_logf(L_FATAL, "[%s]  Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
-                result -= 3;
+                jp_logf(L_FATAL, "[%s]   Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                rootResult = -3;
                 break;
             } else {
-                jp_logf(L_DEBUG, "[%s]  Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                jp_logf(L_DEBUG, "[%s]   Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
             }
-            jp_logf(L_DEBUG, "[%s]  Now search for albums to fetch ...\n", MYNAME);
+            jp_logf(L_DEBUG, "[%s]   Now search for albums to fetch ...\n", MYNAME);
             for (int i=0; i<dirItems; i++) {
-                jp_logf(L_DEBUG, "[%s]   Found album candidate '%s'\n", MYNAME,  dirInfos[i].name);
+                jp_logf(L_DEBUG, "[%s]    Found album candidate '%s'\n", MYNAME,  dirInfos[i].name);
                 // Treo 650 has #Thumbnail dir that is not an album
                 if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
                 //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
-                    jp_logf(L_DEBUG, "[%s]   Found real album '%s'\n", MYNAME,  dirInfos[i].name);
-                    result += fetchAlbum(sd, volref, ROOTDIRS[d], dirInfos[i].name);
+                    jp_logf(L_DEBUG, "[%s]    Found real album '%s'\n", MYNAME,  dirInfos[i].name);
+                    result = MIN(fetchAlbum(sd, volref, ROOTDIRS[d], dirInfos[i].name), result);
                 }
             }
         }
         dlp_VFSFileClose(sd, dirRef);
     }
+    jp_logf(L_DEBUG, "[%s]  Volume %d: rootResult=%d, result=%d\n", MYNAME,  volref, rootResult, result);
     return rootResult + result;
 }
 
@@ -324,26 +326,26 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
     strcat(strcat(strcpy(dstPath, dstDir), "/"), file);
     
     if (dlp_VFSFileOpen(sd, volref, srcPath, vfsModeRead, &fileRef) < 0) {
-          jp_logf(L_FATAL, "[%s]     Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
+          jp_logf(L_FATAL, "[%s]      Could not open file '%s' on volume %d\n", MYNAME, srcPath, volref);
           return -1;
     }
     if (dlp_VFSFileSize(sd, fileRef, (int *)(&filesize)) < 0) {
-        jp_logf(L_WARN, "[%s]     WARNING: Could not get size of '%s' on volume %d, so anyway fetch it.\n", MYNAME, srcPath, volref);
+        jp_logf(L_WARN, "[%s]      WARNING: Could not get size of '%s' on volume %d, so anyway fetch it.\n", MYNAME, srcPath, volref);
     }
 
     struct stat fstat;
     int statErr = stat(dstPath, &fstat);
     if (!statErr && fstat.st_size == filesize) {
-        jp_logf(L_DEBUG, "[%s]     File '%s' already exists, not copying it\n", MYNAME, dstPath);
+        jp_logf(L_DEBUG, "[%s]      File '%s' already exists, not copying it\n", MYNAME, dstPath);
     } else { // If file has not already been backuped, fetch it.
         if (!statErr) {
-            jp_logf(L_DEBUG, "[%s]     File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstPath, fstat.st_size, filesize);
+            jp_logf(L_DEBUG, "[%s]      File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstPath, fstat.st_size, filesize);
         }
         // Open destination file.
         FILE *dstFp;
-        jp_logf(L_INFO, "[%s]     Fetching %s ...\n", MYNAME, dstPath);
+        jp_logf(L_GUI, "[%s]      Fetching %s ...", MYNAME, dstPath);
         if (!(dstFp = fopen(dstPath, "w"))) {
-            jp_logf(L_FATAL, "[%s]      Cannot open %s for writing!\n", MYNAME, dstPath);
+            jp_logf(L_FATAL, "\n[%s]       Cannot open %s for writing!\n", MYNAME, dstPath);
             return -1;
         }
         // Copy file.
@@ -351,13 +353,13 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
             pi_buffer_clear(buf);
             if (dlp_VFSFileRead(sd, fileRef, buf, (filesize > buf->allocated ? buf->allocated : filesize)) < 0)  {
             //if (dlp_VFSFileRead(sd, fileRef, buf, buf->allocated) < 0)  { // works too, but is very slow
-                jp_logf(L_FATAL, "[%s]      File read error; aborting\n", MYNAME);
+                jp_logf(L_FATAL, "\n[%s]       File read error; aborting\n", MYNAME);
                 filesize = -1; // remember error
                 break;
             }
             for (int writesize, offset = 0; offset < buf->used; offset += writesize) {
                 if ((writesize = fwrite(buf->data + offset, 1, buf->used - offset, dstFp)) < 0) {
-                    jp_logf(L_FATAL, "[%s]      File write error; aborting\n", MYNAME);
+                    jp_logf(L_FATAL, "\n[%s]       File write error; aborting\n", MYNAME);
                     filesize = writesize; // remember error; breaks the outer loop
                     break;
                 }
@@ -367,11 +369,12 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
         if (filesize < 0) {
             unlink(dstPath); // remove the partially created file
         } else {
+            jp_logf(L_GUI, "OK\n", MYNAME, dstPath);
 #ifdef HAVE_UTIME
             time_t date;
             // Get the date that the picture was created (not the file), aka modified time.
             if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
-                jp_logf(L_WARN, "[%s]     WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
+                jp_logf(L_WARN, "[%s]      WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volref);
                 statErr = 0; // reset old state
             // And set the destination file modified time to that date.
             } else if (!(statErr = stat(dstPath, &fstat))) {
@@ -381,12 +384,13 @@ int fetchFileIfNeeded(int sd, const unsigned volref, const char *srcDir, const c
                 statErr = utime(dstPath, &utim);
             }
             if (statErr) {
-                jp_logf(L_WARN, "[%s]     WARNING: Cannot set date of file '%s'\n", MYNAME, dstPath);
+                jp_logf(L_WARN, "[%s]      WARNING: Cannot set date of file '%s'\n", MYNAME, dstPath);
             }
 #endif // HAVE_UTIME
         }
     }
     dlp_VFSFileClose(sd, fileRef);
+    jp_logf(L_DEBUG, "[%s]      File size of '%s': %d\n", MYNAME, dstPath, filesize);
     return filesize;
 }
 
@@ -405,15 +409,15 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
     srcAlbumDir = name ? strcat(strcat(strcpy(tmp ,root), "/"), name) : (char *)root;
     
     if (dlp_VFSFileOpen(sd, volref, srcAlbumDir, vfsModeRead, &dirRef) < 0) {
-        jp_logf(L_GUI, "[%s]   Could not open %s '%s' on volume %d\n", MYNAME, (srcAlbumDir == root) ? "root" : "dir", srcAlbumDir, volref);
+        jp_logf(L_GUI, "[%s]    Could not open %s '%s' on volume %d\n", MYNAME, (srcAlbumDir == root) ? "root" : "dir", srcAlbumDir, volref);
         return -2;
     }
     if (!(dstAlbumDir = destinationDir(sd, volref, name))) {
-        jp_logf(L_GUI, "[%s]   Could not open dir '%s'\n", MYNAME, dstAlbumDir);
+        jp_logf(L_GUI, "[%s]    Could not open dir '%s'\n", MYNAME, dstAlbumDir);
         result = -2;
         goto Exit;
     }
-    jp_logf(L_GUI, "[%s]   Fetching album '%s' in '%s' on volume %d ...\n", MYNAME, name, root, volref);
+    jp_logf(L_GUI, "[%s]    Fetching album '%s' in '%s' on volume %d ...\n", MYNAME, name, root, volref);
 
     // Iterate over all the files in the album dir, looking for jpegs and 3gp's and 3g2's (videos).
     unsigned long itr = (unsigned long)vfsIteratorStart;
@@ -423,25 +427,24 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
     //while (itr != (unsigned)vfsIteratorStop) { // doesn't work because of bug <https://github.com/juddmon/jpilot/issues/41>
     for (int dirItems_init = MIN_DIR_ITEMS; (dirItems = dirItems_init) <= MAX_DIR_ITEMS; dirItems_init *= 2) { // WORKAROUND
         if (--loops < 0)  break; // for debugging
-        jp_logf(L_DEBUG, "[%s]    Enumerate album '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
+        jp_logf(L_DEBUG, "[%s]     Enumerate album '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
         itr = (unsigned long)vfsIteratorStart; // workaround, reset itr if it wrongly was -1 or 1888
         if ((result = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
             // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41>):
             // - Why in case of i.e. setting dirItems=4, itr != 0, even if there are more than 4 files?
             // - Why then on SDCard itr == 1888 in the first loop, so out of allowed range?
-            jp_logf(L_FATAL, "[%s]    Enumerate ERROR: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
-            dirItems = 0; // skip file search
-            break;
+            jp_logf(L_FATAL, "[%s]     Enumerate ERROR: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+            goto Exit;
         }
-        jp_logf(L_DEBUG, "[%s]    Enumerate OK: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+        jp_logf(L_DEBUG, "[%s]     Enumerate OK: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
         if (dirItems < dirItems_init) {
             break;
         }
     }
-    jp_logf(L_DEBUG, "[%s]    Now search of %d files, which to fetch ...\n", MYNAME, dirItems);
+    jp_logf(L_DEBUG, "[%s]     Now search of %d files, which to fetch ...\n", MYNAME, dirItems);
     for (int i=0; i<dirItems; i++) {
         char *fname = dirInfos[i].name;
-        jp_logf(L_DEBUG, "[%s]     Found file '%s' attribute %x\n", MYNAME, fname, dirInfos[i].attr);
+        jp_logf(L_DEBUG, "[%s]      Found file '%s' attribute %x\n", MYNAME, fname, dirInfos[i].attr);
         // Grab only regular files, but ignore the 'read only' and 'archived' bits,
         // and only with known extensions.
         char *ext = fname + strlen(fname)-4;
@@ -468,5 +471,6 @@ int fetchAlbum(int sd, const unsigned volref, const char *root, const char *name
     free(dstAlbumDir);
 Exit:
     dlp_VFSFileClose(sd, dirRef);
+    jp_logf(L_DEBUG, "[%s]   Album '%s': result=%d\n", MYNAME,  srcAlbumDir, result);
     return result;
 }
