@@ -71,10 +71,10 @@ static const char UNFILED_ALBUM[] = "Unfiled";
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
 
-int volumeEnumerateIncludeHidden(int, int *, int *);
+int volumeEnumerateIncludeHidden(const int, int *, int *);
 void *mallocLog(size_t);
-int backupMedia(int, int);
-int fetchAlbum(int, const unsigned, const char *, const char *);
+int backupMedia(const int, int);
+int fetchAlbum(const int, const unsigned, FileRef, const char *, const char *);
 
 void plugin_version(int *major_version, int *minor_version) {
     *major_version=0;
@@ -158,7 +158,7 @@ int plugin_sync(int sd) {
  * Returns:       <-- Same as dlp_VFSVolumeEnumerate()
  *
  ***********************************************************************/
-int volumeEnumerateIncludeHidden(int sd, int *numVols, int *volRefs) {
+int volumeEnumerateIncludeHidden(const int sd, int *numVols, int *volRefs) {
     PI_ERR   result;
     VFSInfo  volInfo;
 
@@ -206,7 +206,7 @@ void *mallocLog(size_t size) {
 /*
  *  Backup all albums from volume volRef.
  */
-int backupMedia(int sd, int volRef) {
+int backupMedia(const int sd, int volRef) {
     PI_ERR rootResult = -3, result = 0;
 
     jp_logf(L_DEBUG, "[%s]  Searching roots on volume %d\n", MYNAME, volRef);
@@ -223,7 +223,7 @@ int backupMedia(int sd, int volRef) {
 
         // Fetch the unfiled album, which is simply the root dir.
         // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
-        result = fetchAlbum(sd, volRef, ROOTDIRS[d], NULL);
+        result = fetchAlbum(sd, volRef, dirRef, ROOTDIRS[d], NULL);
 
         //enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
         //while (itr != vfsIteratorStop) { // doesn't work because of type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
@@ -249,8 +249,8 @@ int backupMedia(int sd, int volRef) {
                 // Treo 650 has #Thumbnail dir that is not an album
                 if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
                 //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
-                    jp_logf(L_DEBUG, "[%s]    Found real album '%s'\n", MYNAME,  dirInfos[i].name);
-                    result = MIN(fetchAlbum(sd, volRef, ROOTDIRS[d], dirInfos[i].name), result);
+                    jp_logf(L_DEBUG, "[%s]    Found real album '%s'\n", MYNAME, dirInfos[i].name);
+                    result = MIN(fetchAlbum(sd, volRef, 0, ROOTDIRS[d], dirInfos[i].name), result);
                 }
             }
         }
@@ -278,7 +278,7 @@ int createDir(char *path, const char *dir) {
  * Null is returned if out of memory.
  * Caller should free return value.
  */
-char *destinationDir(int sd, const unsigned volRef, const char *name) {
+char *destinationDir(const int sd, const unsigned volRef, const char *name) {
     char *dst;
     VFSInfo volInfo;
     char *home;
@@ -316,7 +316,7 @@ char *destinationDir(int sd, const unsigned volRef, const char *name) {
 /*
  * Fetch a file and backup it if not existent.
  */
-int fetchFileIfNeeded(int sd, const unsigned volRef, const char *srcDir, const char *dstDir, const char *file) {
+int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, const char *dstDir, const char *file) {
     char srcPath[strlen(srcDir) + strlen(file) + 2];
     char dstPath[strlen(dstDir) + strlen(file) + 2];
     FileRef fileRef;
@@ -369,7 +369,7 @@ int fetchFileIfNeeded(int sd, const unsigned volRef, const char *srcDir, const c
         if (filesize < 0) {
             unlink(dstPath); // remove the partially created file
         } else {
-            jp_logf(L_GUI, "OK\n");
+            jp_logf(L_GUI, " OK\n");
 #ifdef HAVE_UTIME
             time_t date;
             // Get the date that the picture was created (not the file), aka modified time.
@@ -397,27 +397,28 @@ int fetchFileIfNeeded(int sd, const unsigned volRef, const char *srcDir, const c
 /*
  * Fetch the contents of one album and backup them if not existent.
  */
-int fetchAlbum(int sd, const unsigned volRef, const char *root, const char *name) {
-    char tmp[name ? (strlen(root) + strlen(name) + 2) : 0];
+int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *root, const char *name) {
+    char tmp[name ? strlen(root) + strlen(name) + 2 : 0];
     char *srcAlbumDir, *dstAlbumDir;
-    FileRef dirRef;
     int dirItems;
     VFSDirInfo dirInfos[MAX_DIR_ITEMS];
     PI_ERR result = 0;
 
-    // Unfiled album may be really just root dir (this happens on Treo 65O) or album is in /<root>/<name>.
-    srcAlbumDir = name ? strcat(strcat(strcpy(tmp ,root), "/"), name) : (char *)root;
-    
-    if (dlp_VFSFileOpen(sd, volRef, srcAlbumDir, vfsModeRead, &dirRef) < 0) {
-        jp_logf(L_FATAL, "[%s]    ERROR: Could not open %s '%s' on volume %d\n", MYNAME, (srcAlbumDir == root) ? "root" : "dir", srcAlbumDir, volRef);
-        return -2;
+    if (name) {
+        srcAlbumDir = strcat(strcat(strcpy(tmp ,root), "/"), name);
+        if (dlp_VFSFileOpen(sd, volRef, srcAlbumDir, vfsModeRead, &dirRef) < 0) {
+            jp_logf(L_FATAL, "[%s]    ERROR: Could not open dir '%s' on volume %d\n", MYNAME, srcAlbumDir, volRef);
+            return -2;
+        }
+    } else {
+        srcAlbumDir = (char *)root;
     }
     if (!(dstAlbumDir = destinationDir(sd, volRef, name))) {
         jp_logf(L_FATAL, "[%s]    ERROR: Could not open dir '%s'\n", MYNAME, dstAlbumDir);
         result = -2;
         goto Exit;
     }
-    jp_logf(L_GUI, "[%s]    Fetching album '%s' in '%s' on volume %d ...\n", MYNAME, name, root, volRef);
+    jp_logf(L_GUI, "[%s]    Fetching album '%s' in '%s' on volume %d ...\n", MYNAME, name ? name : ".", root, volRef);
 
     // Iterate over all the files in the album dir, looking for jpegs and 3gp's and 3g2's (videos).
     unsigned long itr = (unsigned long)vfsIteratorStart;
@@ -470,7 +471,7 @@ int fetchAlbum(int sd, const unsigned volRef, const char *root, const char *name
     }
     free(dstAlbumDir);
 Exit:
-    dlp_VFSFileClose(sd, dirRef);
+    if (name)  dlp_VFSFileClose(sd, dirRef);
     jp_logf(L_DEBUG, "[%s]   Album '%s': result=%d\n", MYNAME,  srcAlbumDir, result);
     return result;
 }

@@ -17,6 +17,7 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Fixed bug if file extensions are uppercase.
 * Again fixed bad casts on iterators.
 * Simplified file copy code.
+* Reuse dirRef.
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
