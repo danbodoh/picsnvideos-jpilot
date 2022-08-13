@@ -50,6 +50,9 @@ char *rcsid = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 #define L_FATAL JP_LOG_FATAL
 #define L_GUI   JP_LOG_GUI
 
+typedef struct VFSInfo VFSInfo;
+typedef struct VFSDirInfo VFSDirInfo;
+
 static const char HELP_TEXT[] =
 "JPilot plugin (c) 2008 by Dan Bodoh\n\
 Contributor (2022): Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
@@ -68,13 +71,9 @@ static const unsigned MAX_DIR_ITEMS = 1024;
 static const char *ROOTDIRS[] = {"/Photos & Videos", "/DCIM"};
 static const char UNFILED_ALBUM[] = "Unfiled";
 
-typedef struct VFSInfo VFSInfo;
-typedef struct VFSDirInfo VFSDirInfo;
-
-int volumeEnumerateIncludeHidden(const int, int *, int *);
 void *mallocLog(size_t);
+int volumeEnumerateIncludeHidden(const int, int *, int *);
 int backupMedia(const int, int);
-int fetchAlbum(const int, const unsigned, FileRef, const char *, const char *);
 
 void plugin_version(int *major_version, int *minor_version) {
     *major_version=0;
@@ -140,124 +139,11 @@ int plugin_sync(int sd) {
     return result;
 }
 
-/***********************************************************************
- *
- * Function:      volumeEnumerateIncludeHidden
- *
- * Summary:       Drop-in replacement for dlp_VFSVolumeEnumerate().
- *                Attempts to include hidden volumes in the list,
- *                so that we also get the device's BUILTIN volume.
- *                Dan Bodoh, May 2, 2008
- *
- * Parameters:
- *  sd            --> Socket descriptor
- *  volume_count  <-> on input, size of volumes; on output
- *                    number of volumes on Palm
- *  volumes       <-- volume reference numbers
- *
- * Returns:       <-- Same as dlp_VFSVolumeEnumerate()
- *
- ***********************************************************************/
-int volumeEnumerateIncludeHidden(const int sd, int *numVols, int *volRefs) {
-    PI_ERR   result;
-    VFSInfo  volInfo;
-
-    // result on Treo 650:
-    // -301 : No volume (SDCard) found, but maybe hidden volume 1 exists
-    //    4 : At least one volume found, but maybe additional hidden volume 1 exists
-    result = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
-    jp_logf(L_DEBUG, "[%s] dlp_VFSVolumeEnumerate result code %d, found %d volumes\n", MYNAME, result, *numVols);
-    // On the Centro, Treo 650 and maybe more, it appears that the
-    // first non-hidden volRef is 2, and the hidden volRef is 1.
-    // Let's poke around to see, if there is really a volRef 1
-    // that's hidden from the dlp_VFSVolumeEnumerate().
-    if (result < 0)  *numVols = 0; // On Error reset numVols
-    for (int i=0; i<*numVols; i++) { // Search for volume 1
-        jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i, volRefs[i]);
-        if (volRefs[i]==1)
-            goto Exit; // No need to search for hidden volume
-    }
-    if (dlp_VFSVolumeInfo(sd, 1, &volInfo) >= 0 && volInfo.attributes & vfsVolAttrHidden) {
-        jp_logf(L_DEBUG, "[%s] Found hidden volume 1\n", MYNAME);
-        if (*numVols < MAX_VOLUMES)  (*numVols)++;
-        else {
-            jp_logf(L_FATAL, "[%s] ERROR: Volumes > %d were discarded\n", MYNAME, MAX_VOLUMES);
-        }
-        for (int i = (*numVols)-1; i > 0; i--) { // Move existing volRefs
-            jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i-1, volRefs[i-1], i, volRefs[i]);
-            volRefs[i] = volRefs[i-1];
-        }
-        volRefs[0] = 1;
-        if (result < 0)
-            result = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
-    }
-Exit:
-    jp_logf(L_DEBUG, "[%s] volumeEnumerate final result code %d, found %d volumes\n", MYNAME, result, *numVols);
-    return result;
-}
-
 void *mallocLog(size_t size) {
     void *p;
     if (!(p = malloc(size)))
         jp_logf(L_FATAL, "[%s] ERROR: Out of memory\n", MYNAME);
     return p;
-}
-
-/*
- *  Backup all albums from volume volRef.
- */
-int backupMedia(const int sd, int volRef) {
-    PI_ERR rootResult = -3, result = 0;
-
-    jp_logf(L_DEBUG, "[%s]  Searching roots on volume %d\n", MYNAME, volRef);
-    for (int d = 0; d < sizeof(ROOTDIRS)/sizeof(*ROOTDIRS); d++) {
-
-        // Iterate through the root directory, looking for things that might be albums.
-        FileRef dirRef;
-        if (dlp_VFSFileOpen(sd, volRef, ROOTDIRS[d], vfsModeRead, &dirRef) < 0) {
-            jp_logf(L_DEBUG, "[%s]   Root '%s' does not exist on volume %d\n", MYNAME, ROOTDIRS[d], volRef);
-            continue;
-        }
-        jp_logf(L_DEBUG, "[%s]   Opened root '%s' on volume %d\n", MYNAME, ROOTDIRS[d], volRef);
-        rootResult = 0;
-
-        // Fetch the unfiled album, which is simply the root dir.
-        // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
-        result = fetchAlbum(sd, volRef, dirRef, ROOTDIRS[d], NULL);
-
-        //enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
-        //while (itr != vfsIteratorStop) { // doesn't work because of type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
-        unsigned long itr = (unsigned long)vfsIteratorStart;
-        while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
-            int dirItems = 1024;
-            VFSDirInfo dirInfos[dirItems];
-            jp_logf(L_DEBUG, "[%s]   Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
-            PI_ERR enRes;
-            if ((enRes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
-                // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
-                // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
-                // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
-                jp_logf(L_FATAL, "[%s]   Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
-                rootResult = -3;
-                break;
-            } else {
-                jp_logf(L_DEBUG, "[%s]   Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
-            }
-            jp_logf(L_DEBUG, "[%s]   Now search for albums to fetch ...\n", MYNAME);
-            for (int i=0; i<dirItems; i++) {
-                jp_logf(L_DEBUG, "[%s]    Found album candidate '%s'\n", MYNAME,  dirInfos[i].name);
-                // Treo 650 has #Thumbnail dir that is not an album
-                if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
-                //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
-                    jp_logf(L_DEBUG, "[%s]    Found real album '%s'\n", MYNAME, dirInfos[i].name);
-                    result = MIN(fetchAlbum(sd, volRef, 0, ROOTDIRS[d], dirInfos[i].name), result);
-                }
-            }
-        }
-        dlp_VFSFileClose(sd, dirRef);
-    }
-    jp_logf(L_DEBUG, "[%s]  Volume %d: rootResult=%d, result=%d\n", MYNAME,  volRef, rootResult, result);
-    return rootResult + result;
 }
 
 int createDir(char *path, const char *dir) {
@@ -473,5 +359,118 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
 Exit:
     if (name)  dlp_VFSFileClose(sd, dirRef);
     jp_logf(L_DEBUG, "[%s]   Album '%s': result=%d\n", MYNAME,  srcAlbumDir, result);
+    return result;
+}
+
+/*
+ *  Backup all albums from volume volRef.
+ */
+int backupMedia(const int sd, int volRef) {
+    PI_ERR rootResult = -3, result = 0;
+
+    jp_logf(L_DEBUG, "[%s]  Searching roots on volume %d\n", MYNAME, volRef);
+    for (int d = 0; d < sizeof(ROOTDIRS)/sizeof(*ROOTDIRS); d++) {
+
+        // Iterate through the root directory, looking for things that might be albums.
+        FileRef dirRef;
+        if (dlp_VFSFileOpen(sd, volRef, ROOTDIRS[d], vfsModeRead, &dirRef) < 0) {
+            jp_logf(L_DEBUG, "[%s]   Root '%s' does not exist on volume %d\n", MYNAME, ROOTDIRS[d], volRef);
+            continue;
+        }
+        jp_logf(L_DEBUG, "[%s]   Opened root '%s' on volume %d\n", MYNAME, ROOTDIRS[d], volRef);
+        rootResult = 0;
+
+        // Fetch the unfiled album, which is simply the root dir.
+        // Apparently the Treo 650 can store pics in the root dir, as well as in album dirs.
+        result = fetchAlbum(sd, volRef, dirRef, ROOTDIRS[d], NULL);
+
+        //enum dlpVFSFileIteratorConstants itr = vfsIteratorStart;
+        //while (itr != vfsIteratorStop) { // doesn't work because of type mismatch bug <https://github.com/juddmon/jpilot/issues/39>
+        unsigned long itr = (unsigned long)vfsIteratorStart;
+        while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
+            int dirItems = 1024;
+            VFSDirInfo dirInfos[dirItems];
+            jp_logf(L_DEBUG, "[%s]   Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
+            PI_ERR enRes;
+            if ((enRes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
+                // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
+                // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
+                // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
+                jp_logf(L_FATAL, "[%s]   Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                rootResult = -3;
+                break;
+            } else {
+                jp_logf(L_DEBUG, "[%s]   Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+            }
+            jp_logf(L_DEBUG, "[%s]   Now search for albums to fetch ...\n", MYNAME);
+            for (int i=0; i<dirItems; i++) {
+                jp_logf(L_DEBUG, "[%s]    Found album candidate '%s'\n", MYNAME,  dirInfos[i].name);
+                // Treo 650 has #Thumbnail dir that is not an album
+                if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
+                //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
+                    jp_logf(L_DEBUG, "[%s]    Found real album '%s'\n", MYNAME, dirInfos[i].name);
+                    result = MIN(fetchAlbum(sd, volRef, 0, ROOTDIRS[d], dirInfos[i].name), result);
+                }
+            }
+        }
+        dlp_VFSFileClose(sd, dirRef);
+    }
+    jp_logf(L_DEBUG, "[%s]  Volume %d: rootResult=%d, result=%d\n", MYNAME,  volRef, rootResult, result);
+    return rootResult + result;
+}
+
+/***********************************************************************
+ *
+ * Function:      volumeEnumerateIncludeHidden
+ *
+ * Summary:       Drop-in replacement for dlp_VFSVolumeEnumerate().
+ *                Attempts to include hidden volumes in the list,
+ *                so that we also get the device's BUILTIN volume.
+ *                Dan Bodoh, May 2, 2008
+ *
+ * Parameters:
+ *  sd            --> Socket descriptor
+ *  volume_count  <-> on input, size of volumes; on output
+ *                    number of volumes on Palm
+ *  volumes       <-- volume reference numbers
+ *
+ * Returns:       <-- Same as dlp_VFSVolumeEnumerate()
+ *
+ ***********************************************************************/
+int volumeEnumerateIncludeHidden(const int sd, int *numVols, int *volRefs) {
+    PI_ERR   result;
+    VFSInfo  volInfo;
+
+    // result on Treo 650:
+    // -301 : No volume (SDCard) found, but maybe hidden volume 1 exists
+    //    4 : At least one volume found, but maybe additional hidden volume 1 exists
+    result = dlp_VFSVolumeEnumerate(sd, numVols, volRefs);
+    jp_logf(L_DEBUG, "[%s] dlp_VFSVolumeEnumerate result code %d, found %d volumes\n", MYNAME, result, *numVols);
+    // On the Centro, Treo 650 and maybe more, it appears that the
+    // first non-hidden volRef is 2, and the hidden volRef is 1.
+    // Let's poke around to see, if there is really a volRef 1
+    // that's hidden from the dlp_VFSVolumeEnumerate().
+    if (result < 0)  *numVols = 0; // On Error reset numVols
+    for (int i=0; i<*numVols; i++) { // Search for volume 1
+        jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i, volRefs[i]);
+        if (volRefs[i]==1)
+            goto Exit; // No need to search for hidden volume
+    }
+    if (dlp_VFSVolumeInfo(sd, 1, &volInfo) >= 0 && volInfo.attributes & vfsVolAttrHidden) {
+        jp_logf(L_DEBUG, "[%s] Found hidden volume 1\n", MYNAME);
+        if (*numVols < MAX_VOLUMES)  (*numVols)++;
+        else {
+            jp_logf(L_FATAL, "[%s] ERROR: Volumes > %d were discarded\n", MYNAME, MAX_VOLUMES);
+        }
+        for (int i = (*numVols)-1; i > 0; i--) { // Move existing volRefs
+            jp_logf(L_DEBUG, "[%s] *numVols=%d, volRefs[%d]=%d, volRefs[%d]=%d\n", MYNAME, *numVols, i-1, volRefs[i-1], i, volRefs[i]);
+            volRefs[i] = volRefs[i-1];
+        }
+        volRefs[0] = 1;
+        if (result < 0)
+            result = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
+    }
+Exit:
+    jp_logf(L_DEBUG, "[%s] volumeEnumerate final result code %d, found %d volumes\n", MYNAME, result, *numVols);
     return result;
 }
