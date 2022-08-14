@@ -177,7 +177,7 @@ char *destinationDir(const int sd, const unsigned volRef, const char *name) {
         return NULL;
     }
     if (volInfo.mediaType == pi_mktag('T', 'F', 'F', 'S')) {
-        strcpy(card, "Device");
+        strcpy(card, "Internal");
     } else if (volInfo.mediaType == pi_mktag('s', 'd', 'i', 'g')) {
         strcpy(card, "SDCard");
     } else {
