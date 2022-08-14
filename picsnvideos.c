@@ -39,7 +39,7 @@
 //#include "i18n.h"
 
 #define MYNAME "Pics&Videos"
-#define PCDIR "PalmPictures"
+#define PCDIR "Media"
 
 #define L_DEBUG JP_LOG_DEBUG
 #define L_INFO  JP_LOG_INFO // Unfortunately doesn't show in GUI
@@ -58,8 +58,9 @@ Contributor (2022): Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 Version: "VERSION"\n\
 \n\
 Fetches media as pictures, videos and audios from the\n\
-Pics&Videos storage in the Palm and from SDCard to folder\n\
-'"PCDIR"' in your home directory.\n\
+Pics&Videos storage in the Palm and from SDCard to\n\
+folder '"PCDIR"' in your JPilot data directory,\n\
+usually \"$JPILOT_HOME/.jpilot\".\n\
 \n\
 For more documentation, bug reports and new versions,\n\
 see https://github.com/danbodoh/picsnvideos-jpilot";
@@ -143,7 +144,7 @@ void *mallocLog(size_t size) {
 }
 
 int createDir(char *path, const char *dir) {
-    strcat(strcat(path, "/"), dir);
+    if (dir)  strcat(strcat(path, "/"), dir);
     int result;
     if ((result = mkdir(path, 0777))) {
         if (errno != EEXIST) {
@@ -156,19 +157,23 @@ int createDir(char *path, const char *dir) {
 
 /*
  * Return directory name on the PC, where the album should be stored. Returned string is of the form
- * "/home/danb/PalmPictures/Album/". Directories in the path are created as needed.
+ * "$JPILOT_HOME/.jpilot/$PCDIR/Album/". Directories in the path are created as needed.
  * Null is returned if out of memory.
  * Caller should free return value.
  */
 char *destinationDir(const int sd, const unsigned volRef, const char *name) {
     char *dst;
     VFSInfo volInfo;
-    char *home;
-
-    // Use $HOME, or current directory if it is not defined.
-    if (!(home = getenv("HOME"))) {
-        home = ".";
+    
+    if (!(dst = mallocLog(256))) {
+        return dst;
     }
+    // Use $JPILOT_HOME/.jpilot/ or current directory for PCDIR.
+    if (jp_get_home_file_name(PCDIR, dst, 256) < 0) {
+        jp_logf(L_WARN, "%s:     WARNING: Could not get $JPILOT_HOME path, so using '.'\n", MYNAME);
+        strcpy(dst, PCDIR);
+    }
+    jp_logf(L_DEBUG, "%s:     dst='%s'\n", MYNAME, dst);
 
     // Next level is indicator of which card.
     char card[16];
@@ -184,11 +189,8 @@ char *destinationDir(const int sd, const unsigned volRef, const char *name) {
         sprintf(card, "card%d", volInfo.slotRefNum);
     }
 
-    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + (name ? strlen(name) + 4 : 3)))) {
-        return dst;
-    }
     // Create album directory if not existent.
-    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || (name ? createDir(dst, name) : 0)) {
+    if (createDir(dst, NULL) || createDir(dst, card) || (name ? createDir(dst, name) : 0)) {
         free(dst);
         return NULL;
     }
