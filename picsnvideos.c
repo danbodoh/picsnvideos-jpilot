@@ -58,9 +58,9 @@ static const char HELP_TEXT[] =
 Contributor (2022): Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 Version: "MYVERSION"\n\
 \n\
-Fetches pictures and videos from the Pics&Videos\n\
-storage in the Palm to folder '"PCDIR"'\n\
-in your home directory.\n\
+Fetches media as pictures, videos and audios from the\n\
+Pics&Videos storage in the Palm and from SDCard to folder\n\
+'"PCDIR"' in your home directory.\n\
 \n\
 For more documentation, bug reports and new versions,\n\
 see http://sourceforge.net/projects/picsnvideos";
@@ -69,7 +69,6 @@ static const unsigned MAX_VOLUMES = 16;
 static const unsigned MIN_DIR_ITEMS = 4;
 static const unsigned MAX_DIR_ITEMS = 1024;
 static const char *ROOTDIRS[] = {"/Photos & Videos", "/DCIM"};
-static const char UNFILED_ALBUM[] = "Unfiled";
 
 void *mallocLog(size_t);
 int volumeEnumerateIncludeHidden(const int, int *, int *);
@@ -188,11 +187,11 @@ char *destinationDir(const int sd, const unsigned volRef, const char *name) {
         sprintf(card, "card%d", volInfo.slotRefNum);
     }
 
-    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + strlen(name ? name : UNFILED_ALBUM) + 4))) {
+    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + (name ? strlen(name) + 4 : 3)))) {
         return dst;
     }
     // Create album directory if not existent.
-    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || createDir(dst, name ? name : UNFILED_ALBUM)) {
+    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || (name ? createDir(dst, name) : 0)) {
         free(dst);
         return NULL;
     }
@@ -429,12 +428,12 @@ int backupMedia(const int sd, int volRef) {
  *                Dan Bodoh, May 2, 2008
  *
  * Parameters:
- *  sd            --> Socket descriptor
+ *  sd            --> socket descriptor
  *  volume_count  <-> on input, size of volumes; on output
  *                    number of volumes on Palm
  *  volumes       <-- volume reference numbers
  *
- * Returns:       <-- Same as dlp_VFSVolumeEnumerate()
+ * Returns:       <-- same as dlp_VFSVolumeEnumerate()
  *
  ***********************************************************************/
 int volumeEnumerateIncludeHidden(const int sd, int *numVols, int *volRefs) {

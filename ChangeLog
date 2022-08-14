@@ -1,4 +1,4 @@
-Version 0.2.2   Aug 10, 2022
+Version 0.2.2   Aug 14, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 
 * Cleared source code.
@@ -18,6 +18,8 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Again fixed bad casts on iterators.
 * Simplified file copy code.
 * Reuse dirRef.
+* Fixed problem, if there would be a real folder "Unfiled" on SDCard,
+  so removed automatic creation of "Unfiled" on PC.
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
