@@ -67,7 +67,7 @@ see http://sourceforge.net/projects/picsnvideos";
 static const unsigned MAX_VOLUMES = 16;
 static const unsigned MIN_DIR_ITEMS = 4;
 static const unsigned MAX_DIR_ITEMS = 1024;
-static const char *ROOTDIRS[] = {"/Photos & Videos", "/DCIM"};
+static const char *ROOTDIRS[] = {"/Photos & Videos", "/Fotos & Videos", "/DCIM"};
 
 void *mallocLog(size_t);
 int volumeEnumerateIncludeHidden(const int, int *, int *);

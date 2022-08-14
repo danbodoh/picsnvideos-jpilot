@@ -20,6 +20,8 @@ Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 * Reuse dirRef.
 * Fixed problem, if there would be a real folder "Unfiled" on SDCard,
   so removed automatic creation of "Unfiled" on PC.
+* Added additional root "/Fotos & Videos", see:
+  <https://sourceforge.net/p/picsnvideos/discussion/822268/thread/3642430c/>
 
 Version 0.2.1   Jul 22, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
