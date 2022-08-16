@@ -66,13 +66,14 @@ For more documentation, bug reports and new versions,\n\
 see https://github.com/danbodoh/picsnvideos-jpilot";
 
 static const unsigned MAX_VOLUMES = 16;
-static const unsigned MIN_DIR_ITEMS = 4;
+static const unsigned MIN_DIR_ITEMS = 2;
 static const unsigned MAX_DIR_ITEMS = 1024;
 static const char *ROOTDIRS[] = {"/Photos & Videos", "/Fotos & Videos", "/DCIM"};
+static char PCPATH[256];
 
 void *mallocLog(size_t);
 int volumeEnumerateIncludeHidden(const int, int *, int *);
-int backupMedia(const int, int);
+int backupVolume(const int, int);
 
 void plugin_version(int *major_version, int *minor_version) {
     *major_version = 0;
@@ -99,7 +100,7 @@ int plugin_help(char **text, int *width, int *height) {
     if ((*text = mallocLog(strlen(HELP_TEXT) + 1))) {
         strcpy(*text, HELP_TEXT);
     }
-    // *text = HELP_TEXT;  // Alternative causes crash !!!
+    // *text = HELP_TEXT;  // alternative, causes crash !!!
     *height = 0;
     *width = 0;
     return EXIT_SUCCESS;
@@ -114,25 +115,34 @@ int plugin_sync(int sd) {
     int volRefs[MAX_VOLUMES];
     int volumes = MAX_VOLUMES;
 
-    jp_logf(L_GUI, "%s: Start syncing ...\n", MYNAME);
+    jp_logf(L_GUI, "%s: Start syncing ...", MYNAME);
+    jp_logf(L_DEBUG, "\n");
 
     // Get list of the volumes on the pilot.
     if (volumeEnumerateIncludeHidden(sd, &volumes, volRefs) < 0) {
-        jp_logf(L_FATAL, "%s: ERROR: Could not find any VFS volumes; no pictures fetched\n", MYNAME);
+        jp_logf(L_FATAL, "\n%s: ERROR: Could not find any VFS volumes; no pictures fetched\n", MYNAME);
         return EXIT_FAILURE;
+    }
+    // Use $JPILOT_HOME/.jpilot/ or current directory for PCDIR.
+    if (jp_get_home_file_name(PCDIR, PCPATH, 256) < 0) {
+        jp_logf(L_WARN, "\n%s: WARNING: Could not get $JPILOT_HOME path, so using './%s'\n", MYNAME, PCDIR);
+        strcpy(PCPATH, PCDIR);
+    } else {
+        jp_logf(L_GUI, " with: '%s'\n", PCPATH);
     }
 
     // Scan all the volumes for media and backup them.
     PI_ERR result = EXIT_FAILURE;
     for (int i=0; i<volumes; i++) {
         PI_ERR volResult;
-        if ((volResult = backupMedia(sd, volRefs[i])) < 0) {
+        if ((volResult = backupVolume(sd, volRefs[i])) < 0) {
             jp_logf(L_WARN, "%s: WARNING: Could not find any media on volume %d; no pictures fetched\n", MYNAME, volRefs[i]);
             jp_logf(L_DEBUG, "%s: Result from volume %d: %d\n", MYNAME, volRefs[i], volResult);
             continue;
         }
         result = EXIT_SUCCESS;
     }
+    jp_logf(L_DEBUG, "%s: Sync done -> result=%d\n", MYNAME, result);
     return result;
 }
 
@@ -144,7 +154,8 @@ void *mallocLog(size_t size) {
 }
 
 int createDir(char *path, const char *dir) {
-    if (dir)  strcat(strcat(path, "/"), dir);
+    if (dir == PCPATH)  strcpy(path, PCPATH);
+    else  strcat(strcat(path, "/"), dir);
     int result;
     if ((result = mkdir(path, 0777))) {
         if (errno != EEXIST) {
@@ -162,20 +173,14 @@ int createDir(char *path, const char *dir) {
  * Caller should free return value.
  */
 char *destinationDir(const int sd, const unsigned volRef, const char *name) {
-    char *dst;
+    char *path;
     VFSInfo volInfo;
     
-    if (!(dst = mallocLog(256))) {
-        return dst;
+    if (!(path = mallocLog(256))) {
+        return path;
     }
-    // Use $JPILOT_HOME/.jpilot/ or current directory for PCDIR.
-    if (jp_get_home_file_name(PCDIR, dst, 256) < 0) {
-        jp_logf(L_WARN, "%s:     WARNING: Could not get $JPILOT_HOME path, so using '.'\n", MYNAME);
-        strcpy(dst, PCDIR);
-    }
-    jp_logf(L_DEBUG, "%s:     dst='%s'\n", MYNAME, dst);
 
-    // Next level is indicator of which card.
+    // Get indicator of which card.
     char card[16];
     if (dlp_VFSVolumeInfo(sd, volRef, &volInfo) < 0) {
         jp_logf(L_FATAL, "%s:     ERROR: Could not get volume info on volRef %d\n", MYNAME, volRef);
@@ -190,15 +195,15 @@ char *destinationDir(const int sd, const unsigned volRef, const char *name) {
     }
 
     // Create album directory if not existent.
-    if (createDir(dst, NULL) || createDir(dst, card) || (name ? createDir(dst, name) : 0)) {
-        free(dst);
+    if (createDir(path, PCPATH) || createDir(path, card) || (name ? createDir(path, name) : 0)) {
+        free(path);
         return NULL;
     }
-    return dst; // must be free'd by caller
+    return path; // must be free'd by caller
 }
 
 /*
- * Fetch a file and backup it if not existent.
+ * Fetch a file and backup it, if not existent.
  */
 int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, const char *dstDir, const char *file) {
     char srcPath[strlen(srcDir) + strlen(file) + 2];
@@ -272,7 +277,7 @@ int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, c
         }
     }
     dlp_VFSFileClose(sd, fileRef);
-    jp_logf(L_DEBUG, "%s:      File size of '%s': %d\n", MYNAME, dstPath, filesize);
+    jp_logf(L_DEBUG, "%s:      File size / coppy result of '%s': %d\n", MYNAME, dstPath, filesize);
     return filesize;
 }
 
@@ -310,16 +315,19 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
     //while (itr != (unsigned)vfsIteratorStop) { // doesn't work because of bug <https://github.com/juddmon/jpilot/issues/41>
     for (int dirItems_init = MIN_DIR_ITEMS; (dirItems = dirItems_init) <= MAX_DIR_ITEMS; dirItems_init *= 2) { // WORKAROUND
         if (--loops < 0)  break; // for debugging
-        jp_logf(L_DEBUG, "%s:     Enumerate album '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
         itr = (unsigned long)vfsIteratorStart; // workaround, reset itr if it wrongly was -1 or 1888
+        jp_logf(L_DEBUG, "%s:     Enumerate album '%s', dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
         if ((result = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
             // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41>):
             // - Why in case of i.e. setting dirItems=4, itr != 0, even if there are more than 4 files?
             // - Why then on SDCard itr == 1888 in the first loop, so out of allowed range?
-            jp_logf(L_FATAL, "%s:     Enumerate ERROR: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+            jp_logf(L_FATAL, "%s:     Enumerate ERROR: result=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
             goto Exit;
         }
-        jp_logf(L_DEBUG, "%s:     Enumerate OK: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+        jp_logf(L_DEBUG, "%s:     Enumerate OK: result=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+        for (int i= dirItems_init==MIN_DIR_ITEMS ? 0 : dirItems_init/2; i<dirItems; i++) {
+            jp_logf(L_DEBUG, "%s:      dirItem %3d: '%s' attribute %x\n", MYNAME, i, dirInfos[i].name, dirInfos[i].attr);
+        }
         if (dirItems < dirItems_init) {
             break;
         }
@@ -354,14 +362,14 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
     free(dstAlbumDir);
 Exit:
     if (name)  dlp_VFSFileClose(sd, dirRef);
-    jp_logf(L_DEBUG, "%s:   Album '%s': result=%d\n", MYNAME,  srcAlbumDir, result);
+    jp_logf(L_DEBUG, "%s:   Album '%s' done -> result=%d\n", MYNAME,  srcAlbumDir, result);
     return result;
 }
 
 /*
  *  Backup all albums from volume volRef.
  */
-int backupMedia(const int sd, int volRef) {
+int backupVolume(const int sd, int volRef) {
     PI_ERR rootResult = -3, result = 0;
 
     jp_logf(L_DEBUG, "%s:  Searching roots on volume %d\n", MYNAME, volRef);
@@ -386,17 +394,17 @@ int backupMedia(const int sd, int volRef) {
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
             int dirItems = 1024;
             VFSDirInfo dirInfos[dirItems];
-            jp_logf(L_DEBUG, "%s:   Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
+            jp_logf(L_DEBUG, "%s:   Enumerate root '%s', dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
             PI_ERR enRes;
             if ((enRes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
                 // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
                 // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
                 // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
-                jp_logf(L_FATAL, "%s:   Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                jp_logf(L_FATAL, "%s:   Enumerate ERROR: enRes=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
                 rootResult = -3;
                 break;
             } else {
-                jp_logf(L_DEBUG, "%s:   Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                jp_logf(L_DEBUG, "%s:   Enumerate OK: enRes=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
             }
             jp_logf(L_DEBUG, "%s:   Now search for albums to fetch ...\n", MYNAME);
             for (int i=0; i<dirItems; i++) {
@@ -411,7 +419,7 @@ int backupMedia(const int sd, int volRef) {
         }
         dlp_VFSFileClose(sd, dirRef);
     }
-    jp_logf(L_DEBUG, "%s:  Volume %d: rootResult=%d, result=%d\n", MYNAME,  volRef, rootResult, result);
+    jp_logf(L_DEBUG, "%s:  Volume %d done -> rootResult=%d, result=%d\n", MYNAME,  volRef, rootResult, result);
     return rootResult + result;
 }
 
@@ -467,6 +475,6 @@ int volumeEnumerateIncludeHidden(const int sd, int *numVols, int *volRefs) {
             result = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
     }
 Exit:
-    jp_logf(L_DEBUG, "%s: volumeEnumerateIncludeHidden found %d volumes, result=%d\n", MYNAME, *numVols, result);
+    jp_logf(L_DEBUG, "%s: volumeEnumerateIncludeHidden found %d volumes -> result=%d\n", MYNAME, *numVols, result);
     return result;
 }
