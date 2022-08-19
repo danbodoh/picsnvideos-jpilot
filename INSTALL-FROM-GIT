@@ -29,7 +29,7 @@ git add
 git commit -m "comment"
 
 Increment version:
-In configure.ac edit line 5: [0.2.2] -> [x.y.z]
+In configure.ac edit line 5: [0.2.3] -> [x.y.z]
 git add
 git commit -m "comment"
 git tag -m "comment" x.y.z
