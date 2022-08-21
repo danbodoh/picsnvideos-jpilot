@@ -39,6 +39,6 @@ will be refetched.  To force all pictures to be re-fetched, delete
 the file $HOME/.jpilot/picsnvideos-fetched.gdbm.
 
 Problems or suggestions can be reported in the forums or tracker at
-http://sourceforge.net/projects/picsnvideos.  it is helpful to include
+https://github.com/danbodoh/picsnvideos-jpilot.  it is helpful to include
 the output that 'jpilot -d' creates whey you sync.
 This output goes both to standard output and to 'jpilot.log'.
