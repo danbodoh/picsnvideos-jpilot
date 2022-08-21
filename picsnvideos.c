@@ -47,6 +47,9 @@
 #define L_FATAL JP_LOG_FATAL
 #define L_GUI   JP_LOG_GUI
 
+#define PREF_PICSNVIDEOS_THUMBNAILS NUM_PREFS
+//#redefine NUM_PREFS NUM_PREFS + 1
+
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
 
@@ -70,6 +73,11 @@ static const unsigned MIN_DIR_ITEMS = 2;
 static const unsigned MAX_DIR_ITEMS = 1024;
 static const char *ROOTDIRS[] = {"/Photos & Videos", "/Fotos & Videos", "/DCIM"};
 static char PCPATH[256];
+static prefType PREFS[] = {
+   {"thumbnails", INTTYPE, INTTYPE, 0, NULL, 0}
+   };
+static const unsigned NUM_PREFS = sizeof(PREFS)/sizeof(prefType);
+static long thumbnails;
 
 void *mallocLog(size_t);
 int volumeEnumerateIncludeHidden(const int, int *, int *);
@@ -108,6 +116,13 @@ int plugin_help(char **text, int *width, int *height) {
 
 int plugin_startup(jp_startup_info *info) {
     jp_init();
+    jp_pref_init(PREFS, NUM_PREFS);
+    if (jp_pref_read_rc_file("picsnvideos.rc", PREFS, NUM_PREFS) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not read PREFS from '%s'\n", MYNAME, "picsnvideos.rc");
+    if (jp_get_pref(PREFS, 0, &thumbnails, NULL) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not read pref '%s' from PREFS[]\n", MYNAME, PREFS[0].name);
+    if (jp_pref_write_rc_file("picsnvideos.rc", PREFS, NUM_PREFS) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not write PREFS to '%s'\n", MYNAME, "picsnvideos.rc");
     return EXIT_SUCCESS;
 }
 
@@ -146,6 +161,11 @@ int plugin_sync(int sd) {
     return result;
 }
 
+int plugin_exit_cleanup(void) {
+    jp_free_prefs(PREFS, NUM_PREFS);
+    return EXIT_SUCCESS;
+}
+
 void *mallocLog(size_t size) {
     void *p;
     if (!(p = malloc(size)))
@@ -175,7 +195,7 @@ int createDir(char *path, const char *dir) {
 char *destinationDir(const int sd, const unsigned volRef, const char *name) {
     char *path;
     VFSInfo volInfo;
-    
+
     if (!(path = mallocLog(256))) {
         return path;
     }
@@ -346,13 +366,13 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
                 vfsFileAttrDirectory   |
                 vfsFileAttrLink) ||
                 strlen(fname) < 4 || (
-                //strcasecmp(ext, ".thb") &&  // thumbnail from album #Thumbnail (Treo 650)
-                //strcasecmp(ext+1, ".db") && // DB file
-                strcasecmp(ext, ".jpg") &&  // JPEG picture
-                strcasecmp(ext, ".3gp") &&  // video (GSM phones)
-                strcasecmp(ext, ".3g2") &&  // video (CDMA phones)
-                strcasecmp(ext, ".amr") &&  // audio caption (GSM phones)
-                strcasecmp(ext, ".qcp"))) { // audio caption (CDMA phones)
+                (!thumbnails || strcasecmp(ext, ".thb")) &&  // thumbnail from album #Thumbnail (Treo 650)
+                //strcasecmp(ext+1, ".db") &&                  // DB file
+                strcasecmp(ext, ".jpg") &&                   // JPEG picture
+                strcasecmp(ext, ".3gp") &&                   // video (GSM phones)
+                strcasecmp(ext, ".3g2") &&                   // video (CDMA phones)
+                strcasecmp(ext, ".amr") &&                   // audio caption (GSM phones)
+                strcasecmp(ext, ".qcp"))) {                  // audio caption (CDMA phones)
             continue;
         }
         if (fetchFileIfNeeded(sd, volRef, srcAlbumDir, dstAlbumDir, fname) < 0) {
@@ -410,8 +430,7 @@ int backupVolume(const int sd, int volRef) {
             for (int i=0; i<dirItems; i++) {
                 jp_logf(L_DEBUG, "%s:    Found album candidate '%s'\n", MYNAME,  dirInfos[i].name);
                 // Treo 650 has #Thumbnail dir that is not an album
-                if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
-                //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
+                if (dirInfos[i].attr & vfsFileAttrDirectory && (thumbnails || strcmp(dirInfos[i].name, "#Thumbnail"))) {
                     jp_logf(L_DEBUG, "%s:    Found real album '%s'\n", MYNAME, dirInfos[i].name);
                     result = MIN(fetchAlbum(sd, volRef, 0, ROOTDIRS[d], dirInfos[i].name), result);
                 }
