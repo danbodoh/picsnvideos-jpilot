@@ -62,7 +62,7 @@ Pics&Videos storage in the Palm and from SDCard to folder\n\
 '"PCDIR"' in your home directory.\n\
 \n\
 For more documentation, bug reports and new versions,\n\
-see http://sourceforge.net/projects/picsnvideos";
+see https://github.com/danbodoh/picsnvideos-jpilot";
 
 static const unsigned MAX_VOLUMES = 16;
 static const unsigned MIN_DIR_ITEMS = 4;
