@@ -5,7 +5,7 @@ videos from late model Palm smartphones.
 Picsnvideos supports the Treo 650, Treo 680, Treo 700p, Treo 755p, and
 the Centro.  Only the Treo 650 and Centro have been known to be tested.
 Please post your experiences with untested devices at
-http://sourceforge.net/projects/picsnvideos .
+https://github.com/danbodoh/picsnvideos-jpilot
 
 This plugin fetches, rather than syncs.  The plugin reads pictures and
 videos taken with the camera on the Palm, and stores them on the computer.
