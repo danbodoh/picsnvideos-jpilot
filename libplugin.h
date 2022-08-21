@@ -183,6 +183,7 @@ struct search_result
 int plugin_get_name(char *name, int len);
 int plugin_get_menu_name(char *name, int len);
 int plugin_get_db_name(char *db_name, int len);
+int plugin_get_help_name(char *name, int len);
 int plugin_startup(jp_startup_info *info);
 /* int plugin_gui(GtkWidget *vbox, GtkWidget *hbox, unsigned int unique_id);
  *    commented out by Dan Bodoh; not using gtk

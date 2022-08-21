@@ -1,3 +1,34 @@
+Version 0.2.2   Aug 14, 2022
+Ulf Zibis <Ulf.Zibis@CoSoCo.de>
+
+* Cleared source code.
+* Merged duplicate code.
+* Freed forgotten heap memory.
+* Replaced heap memory use by arrays where possible.
+* Fixed bug, if PC directory could not be created.
+* Check enummeration errors.
+* Fixed bugs in volumeEnumerateIncludeHidden():
+  If MAX_VOLUMES were reached, last volRef was overwritten by hidden volume ref.
+  Set volRefs in correct order.
+* Fixed null pointer bug, if database could not be opened.
+* Fetch and backup files immediately after album found.
+* Got rid of using gdbm data base.
+* Fixed bug: File date & time on backuped media was wrong.
+* Fixed bug if file extensions are uppercase.
+* Again fixed bad casts on iterators.
+* Simplified file copy code.
+* Reuse dirRef.
+* Fixed problem, if there would be a real folder "Unfiled" on SDCard,
+  so removed automatic creation of "Unfiled" on PC.
+* Added additional root "/Fotos & Videos", see:
+  <https://sourceforge.net/p/picsnvideos/discussion/822268/thread/3642430c/>
+
+Version 0.2.1   Jul 22, 2022
+Ulf Zibis <Ulf.Zibis@CoSoCo.de>
+
+* Updated config files.
+* Fixed endless loops by inserting correct casts on iterators.
+
 Version 0.2   May 17, 2008
 Dan Bodoh
 

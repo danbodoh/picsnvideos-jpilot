@@ -4,17 +4,17 @@ videos from late model Palm smartphones.
 
 Picsnvideos supports the Treo 650, Treo 680, Treo 700p, Treo 755p, and
 the Centro.  Only the Treo 650 and Centro have been known to be tested.
-Please post your experiences with untested devices at 
+Please post your experiences with untested devices at
 http://sourceforge.net/projects/picsnvideos .
 
 This plugin fetches, rather than syncs.  The plugin reads pictures and
-videos taken with the camera on the Palm, and stores them on the computer.  
+videos taken with the camera on the Palm, and stores them on the computer.
 It will also fetch audio captions added with the 'Pics&Videos'
 application (known as 'Media' on older Palms). Files are never deleted
 from the Palm or from the computer.
 
-Files from the internal memory of the Palm are stored in 
-'$HOME/PalmPictures/Device'.  Files from the Palm's SD Card are stored in 
+Files from the internal memory of the Palm are stored in
+'$HOME/PalmPictures/Device'.  Files from the Palm's SD Card are stored in
 '$HOME/PalmPictures/SDCard'.
 
 Each album on the Palm is a directory under 'Device/' or 'SDCard/'.
@@ -28,9 +28,9 @@ The file extensions of the files that picsnvideos fetches include:
     .3gp - video clips from GSM phones
     .3g2 - video clips from CDMA phones
 
-The audio photo captions are named <photo_name.jpg>.amr or 
-<photo_name.jpg>.qcp.  For example, the picture 
-photo_051608_001.jpg  will have an audio caption named 
+The audio photo captions are named <photo_name.jpg>.amr or
+<photo_name.jpg>.qcp.  For example, the picture
+photo_051608_001.jpg  will have an audio caption named
 photo_051608_001.jpg.amr (or .qcp).
 
 Once a picture or video has been fetched, it will never be fetched
@@ -39,6 +39,6 @@ will be refetched.  To force all pictures to be re-fetched, delete
 the file $HOME/.jpilot/picsnvideos-fetched.gdbm.
 
 Problems or suggestions can be reported in the forums or tracker at
-http://sourceforge.net/projects/picsnvideos.  it is helpful to include 
+http://sourceforge.net/projects/picsnvideos.  it is helpful to include
 the output that 'jpilot -d' creates whey you sync.
 This output goes both to standard output and to 'jpilot.log'.

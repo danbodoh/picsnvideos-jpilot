@@ -1,26 +1,33 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ(2.61)
-AC_INIT([picsnvideos], [0.2])
+AC_PREREQ([2.71])
+AC_INIT([picsnvideos],[0.2.3])
 AM_INIT_AUTOMAKE
 AC_CONFIG_SRCDIR([picsnvideos.c])
-AC_CONFIG_HEADER([config.h])
+AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_MACRO_DIRS([m4])
 
 # Checks for programs.
 AC_PROG_CC
-AC_ISC_POSIX
+AC_SEARCH_LIBS([strerror],[cposix])
 
 AC_DISABLE_STATIC
-AC_PROG_LIBTOOL
+LT_INIT
 AC_PROG_INSTALL
 
 # Checks for libraries.
-AC_CHECK_LIB(gdbm, main, LIBS="$libs -lgdbm",
- AC_MSG_ERROR([*** GDBM not installed - please install first ***]))
 
 # Checks for header files.
-AC_HEADER_STDC
+m4_warn([obsolete],
+[The preprocessor macro `STDC_HEADERS' is obsolete.
+  Except in unusual embedded environments, you can safely include all
+  ISO C90 headers unconditionally.])dnl
+# Autoupdate added the next two lines to ensure that your configure
+# script's behavior did not change.  They are probably safe to remove.
+AC_CHECK_INCLUDES_DEFAULT
+AC_PROG_EGREP
+
 AC_CHECK_HEADERS([stdlib.h string.h])
 
 # Checks for typedefs, structures, and compiler characteristics.
@@ -40,7 +47,7 @@ dnl ******************************
 dnl Check for pilot-link libs
 pilot_prefix=""
 AC_ARG_WITH(pilot_prefix,
- AC_HELP_STRING([--with-pilot-prefix=PFX],[Prefix to top level of pilot-link files (e.g., = /usr/local if the pilot-link includes are in /usr/local/include and libs are in /usr/local/lib)]))
+ AS_HELP_STRING([--with-pilot-prefix=PFX],[Prefix to top level of pilot-link files (e.g., = /usr/local if the pilot-link includes are in /usr/local/include and libs are in /usr/local/lib)]))
 
 if test "x$with_pilot_prefix" != "x"; then
    pilot_prefix=$with_pilot_prefix
@@ -121,11 +128,10 @@ save_LIBS="$LIBS"
 LIBS="$LIBS $PILOT_LIBS"
 
 dnl *** check for pi-version.h
-AC_TRY_COMPILE([#include <pi-version.h>], [
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <pi-version.h>]], [[
    exit(0);
-], ,
- AC_MSG_ERROR([pilot-link header pi-version.h not found])
-)
+]])],[],[AC_MSG_ERROR(pilot-link header pi-version.h not found)
+])
 
 dnl *****
 dnl * Pilot-link version variations, 12.0, etc.
@@ -163,7 +169,7 @@ AC_OUTPUT
 #dnl * GTK 2
 #dnl *************************
 #AC_ARG_ENABLE(gtk2,
-#   AC_HELP_STRING([--disable-gtk2],[Disable GTK2 support and compile with GTK1]),
+#   AS_HELP_STRING([--disable-gtk2],[Disable GTK2 support and compile with GTK1]),
 #   enable_gtk2=$enableval,
 #   enable_gtk2=yes
 #   )

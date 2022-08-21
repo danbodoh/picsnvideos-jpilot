@@ -1,0 +1,35 @@
+Install JPilot:
+curl -s https://packagecloud.io/install/repositories/judd/jpilot/script.deb.sh | sudo bash
+sudo apt install jpilot jpilot-plugins pilot-link
+
+Install dependencies:
+Get libpisock-dev_*_amd64.deb from: https://packages.ubuntu.com/bionic/amd64/libpisock-dev/download
+Manually extract data.tar.xz from it
+sudo tar -xkf data.tar.xz -C /
+sudo apt install libusb-dev libbluetooth-dev
+
+From the project folder:
+autoreconf -i
+./configure --prefix=/usr
+#./configure ## for local install
+make clean
+make
+make check
+sudo make install
+#make local_install ## for local install
+
+Uninstall:
+sudo bash "uninstall libpisock-dev.sh"
+sudo apt purge libusb-dev libbluetooth-dev
+sudo make uninstall
+
+GIT:
+git status
+git add
+git commit -m "comment"
+
+Increment version:
+In configure.ac edit line 5: [0.2.3] -> [x.y.z]
+git add
+git commit -m "comment"
+git tag -m "comment" x.y.z

@@ -1,0 +1,51 @@
+# generic files to ignore
+# backup files (*~) and vim swap file (.swp), MacOS dir file (.DS_Store)
+*~
+*.lock
+*.DS_Store
+.*.swp
+*.out
+*.bak
+*.zip
+
+# IDE files to ignore (Netbeans, Eclipse)
+nbproject/private/
+.classpath
+.project
+.settings
+
+# ignore generated .class files
+*.class
+
+# except this file
+!.gitignore
+
+# from autoreconf -i
+config.guess
+config.sub
+compile
+depcomp
+install-sh
+missing
+autom4te.cache
+m4
+aclocal.m4
+config.h.in
+configure
+ltmain.sh
+Makefile.in
+
+# from configure
+config.log
+config.status
+config.h
+.deps
+libtool
+stamp-h1
+Makefile
+
+# project files from make
+*.la
+*.lo
+.libs
+
