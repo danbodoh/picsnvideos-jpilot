@@ -380,11 +380,11 @@ int jp_set_pref(prefType prefs[], int which, long n, const char *string);
 /*
  * This function reads an rc file and sets the preferences from it.
  */
-int jp_pref_read_rc_file(char *filename, prefType prefs[], int num_prefs);
+int jp_pref_read_rc_file(const char *filename, prefType prefs[], int num_prefs);
 /*
  * This function writes preferences to an rc file.
  */
-int jp_pref_write_rc_file(char *filename, prefType prefs[], int num_prefs);
+int jp_pref_write_rc_file(const char *filename, prefType prefs[], int num_prefs);
 
 /*************************************
  * convert char code

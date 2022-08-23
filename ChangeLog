@@ -1,9 +1,10 @@
-Version 0.3   Aug 15, 2022
+Version 0.3   Aug 23, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 
 * Renamed folder "Device" to "Internal" as known from Windows desktop app.
 * Instead $HOME/PalmPictures use $PALM_HOME/.jpilot/Media.
 * Fetch thumbnails if enabled in prefs.
+* Fetch file types upon list in prefs.
 
 Version 0.2.2   Aug 14, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
