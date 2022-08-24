@@ -39,16 +39,17 @@
 //#include "i18n.h"
 
 #define MYNAME "Pics&Videos"
-#define PCDIR "PalmPictures"
+#define PCDIR "Media"
 
 #define L_DEBUG JP_LOG_DEBUG
-#define L_INFO  JP_LOG_INFO // Unfortunately doesn't show in GUI
+#define L_INFO  JP_LOG_INFO // Unfortunately doesn't show up in GUI
 #define L_WARN  JP_LOG_WARN
 #define L_FATAL JP_LOG_FATAL
 #define L_GUI   JP_LOG_GUI
 
 typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
+typedef struct fileType {char ext[16]; struct fileType *next;} fileType;
 
 static const char rcsid[] = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
 
@@ -58,20 +59,36 @@ Contributor (2022): Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
 Version: "VERSION"\n\
 \n\
 Fetches media as pictures, videos and audios from the\n\
-Pics&Videos storage in the Palm and from SDCard to folder\n\
-'"PCDIR"' in your home directory.\n\
+Pics&Videos storage in the Palm and from SDCard to\n\
+folder '"PCDIR"' in your JPilot data directory,\n\
+usually \"$JPILOT_HOME/.jpilot\".\n\
 \n\
 For more documentation, bug reports and new versions,\n\
 see https://github.com/danbodoh/picsnvideos-jpilot";
 
 static const unsigned MAX_VOLUMES = 16;
-static const unsigned MIN_DIR_ITEMS = 4;
+static const unsigned MIN_DIR_ITEMS = 2;
 static const unsigned MAX_DIR_ITEMS = 1024;
 static const char *ROOTDIRS[] = {"/Photos & Videos", "/Fotos & Videos", "/DCIM"};
+static char PCPATH[256];
+static const char *PREFS_FILE = "picsnvideos.rc";
+static prefType PREFS[] = {
+    {"synchThumbnailsAlbum", INTTYPE, INTTYPE, 0, NULL, 0},
+    // JPEG picture
+    // video (GSM phones)
+    // video (CDMA phones)
+    // audio caption (GSM phones)
+    // audio caption (CDMA phones)
+    {"fileTypes", CHARTYPE, CHARTYPE, 0, ".jpg.3gp.3g2.amr.qcp" , 256}
+};
+static const unsigned NUM_PREFS = sizeof(PREFS)/sizeof(prefType);
+static long synchThumbnailsAlbum;
+static char *fileTypes;
+static fileType *fileTypeList = NULL;
 
 void *mallocLog(size_t);
 int volumeEnumerateIncludeHidden(const int, int *, int *);
-int backupMedia(const int, int);
+int backupVolume(const int, int);
 
 void plugin_version(int *major_version, int *minor_version) {
     *major_version = 0;
@@ -86,7 +103,7 @@ int plugin_get_name(char *name, int len) {
 }
 
 int plugin_get_help_name(char *name, int len) {
-    //g_snprintf(name, len, _("About %s"), _(MYNAME));
+    //g_snprintf(name, len, _("About %s"), _(MYNAME)); // With language support.
     //return EXIT_SUCCESS;
     snprintf(name, len, "About %s", MYNAME);
     return EXIT_SUCCESS;
@@ -98,26 +115,62 @@ int plugin_help(char **text, int *width, int *height) {
     if ((*text = mallocLog(strlen(HELP_TEXT) + 1))) {
         strcpy(*text, HELP_TEXT);
     }
-    // *text = HELP_TEXT;  // Alternative causes crash !!!
+    // *text = HELP_TEXT;  // alternative, causes crash !!!
     *height = 0;
     *width = 0;
     return EXIT_SUCCESS;
 }
 
 int plugin_startup(jp_startup_info *info) {
+    int result = EXIT_SUCCESS;
     jp_init();
-    return EXIT_SUCCESS;
+    jp_pref_init(PREFS, NUM_PREFS);
+    if (jp_pref_read_rc_file(PREFS_FILE, PREFS, NUM_PREFS) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not read PREFS from '%s'\n", MYNAME, PREFS_FILE);
+    if (jp_get_pref(PREFS, 0, &synchThumbnailsAlbum, NULL) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not read pref '%s' from PREFS[]\n", MYNAME, PREFS[0].name);
+    if (jp_get_pref(PREFS, 1, NULL, (const char **)&fileTypes) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not read pref '%s' from PREFS[]\n", MYNAME, PREFS[1].name);
+    if (jp_pref_write_rc_file(PREFS_FILE, PREFS, NUM_PREFS) < 0) // To initialize with defaults, if pref file wasn't existent.
+        jp_logf(L_WARN, "%s: WARNING: Could not write PREFS to '%s'\n", MYNAME, PREFS_FILE);
+    for (char *last; (last = strrchr(fileTypes, '.')) >= fileTypes; *last = 0) {
+        fileType *ftype;
+        if (strlen(last) < sizeof(ftype->ext) && (ftype = mallocLog(sizeof(*ftype)))) {
+            strcpy(ftype->ext, last);
+            ftype->next = fileTypeList;
+            fileTypeList = ftype;
+        } else {
+            plugin_exit_cleanup();
+            result = EXIT_FAILURE;
+            break;
+        }
+    }
+    jp_free_prefs(PREFS, NUM_PREFS);
+    return result;
 }
 
 int plugin_sync(int sd) {
     int volRefs[MAX_VOLUMES];
     int volumes = MAX_VOLUMES;
 
-    jp_logf(L_GUI, "%s: Start syncing ...\n", MYNAME);
+    jp_logf(L_GUI, "%s: Start syncing ...", MYNAME);
+    jp_logf(L_DEBUG, "\n");
 
     // Get list of the volumes on the pilot.
     if (volumeEnumerateIncludeHidden(sd, &volumes, volRefs) < 0) {
-        jp_logf(L_FATAL, "%s: ERROR: Could not find any VFS volumes; no pictures fetched\n", MYNAME);
+        jp_logf(L_FATAL, "\n%s: ERROR: Could not find any VFS volumes; no media fetched\n", MYNAME);
+        return EXIT_FAILURE;
+    }
+    // Use $JPILOT_HOME/.jpilot/ or current directory for PCDIR.
+    if (jp_get_home_file_name(PCDIR, PCPATH, 256) < 0) {
+        jp_logf(L_WARN, "\n%s: WARNING: Could not get $JPILOT_HOME path, so using './%s'\n", MYNAME, PCDIR);
+        strcpy(PCPATH, PCDIR);
+    } else {
+        jp_logf(L_GUI, " with '%s'\n", PCPATH);
+    }
+    // Check if there are any file types loaded.
+    if (!fileTypeList) {
+        jp_logf(L_FATAL, "%s: ERROR: Could not find any file types from '%s'; no media fetched\n", MYNAME, PREFS_FILE);
         return EXIT_FAILURE;
     }
 
@@ -125,14 +178,23 @@ int plugin_sync(int sd) {
     PI_ERR result = EXIT_FAILURE;
     for (int i=0; i<volumes; i++) {
         PI_ERR volResult;
-        if ((volResult = backupMedia(sd, volRefs[i])) < 0) {
-            jp_logf(L_WARN, "%s: WARNING: Could not find any media on volume %d; no pictures fetched\n", MYNAME, volRefs[i]);
+        if ((volResult = backupVolume(sd, volRefs[i])) < 0) {
+            jp_logf(L_WARN, "%s: WARNING: Could not find any media on volume %d; no media fetched\n", MYNAME, volRefs[i]);
             jp_logf(L_DEBUG, "%s: Result from volume %d: %d\n", MYNAME, volRefs[i], volResult);
             continue;
         }
         result = EXIT_SUCCESS;
     }
+    jp_logf(L_DEBUG, "%s: Sync done -> result=%d\n", MYNAME, result);
     return result;
+}
+
+int plugin_exit_cleanup(void) {
+    for (fileType *tmp; (tmp = fileTypeList);) {
+        fileTypeList = fileTypeList->next;
+        free(tmp);
+    }
+    return EXIT_SUCCESS;
 }
 
 void *mallocLog(size_t size) {
@@ -143,7 +205,8 @@ void *mallocLog(size_t size) {
 }
 
 int createDir(char *path, const char *dir) {
-    strcat(strcat(path, "/"), dir);
+    if (dir == PCPATH)  strcpy(path, PCPATH);
+    else  strcat(strcat(path, "/"), dir);
     int result;
     if ((result = mkdir(path, 0777))) {
         if (errno != EEXIST) {
@@ -156,47 +219,42 @@ int createDir(char *path, const char *dir) {
 
 /*
  * Return directory name on the PC, where the album should be stored. Returned string is of the form
- * "/home/danb/PalmPictures/Album/". Directories in the path are created as needed.
+ * "$JPILOT_HOME/.jpilot/$PCDIR/Album/". Directories in the path are created as needed.
  * Null is returned if out of memory.
  * Caller should free return value.
  */
 char *destinationDir(const int sd, const unsigned volRef, const char *name) {
-    char *dst;
+    char *path;
     VFSInfo volInfo;
-    char *home;
 
-    // Use $HOME, or current directory if it is not defined.
-    if (!(home = getenv("HOME"))) {
-        home = ".";
+    if (!(path = mallocLog(256))) {
+        return path;
     }
 
-    // Next level is indicator of which card.
+    // Get indicator of which card.
     char card[16];
     if (dlp_VFSVolumeInfo(sd, volRef, &volInfo) < 0) {
-        jp_logf(L_FATAL, "%s:     ERROR: Could not get volume info on volRef %d\n", MYNAME, volRef);
+        jp_logf(L_FATAL, "%s:     ERROR: Could not get volume info from volRef %d\n", MYNAME, volRef);
         return NULL;
     }
     if (volInfo.mediaType == pi_mktag('T', 'F', 'F', 'S')) {
-        strcpy(card, "Device");
+        strcpy(card, "Internal");
     } else if (volInfo.mediaType == pi_mktag('s', 'd', 'i', 'g')) {
         strcpy(card, "SDCard");
     } else {
         sprintf(card, "card%d", volInfo.slotRefNum);
     }
 
-    if (!(dst = mallocLog(strlen(home) + strlen(PCDIR) + strlen(card) + (name ? strlen(name) + 4 : 3)))) {
-        return dst;
-    }
     // Create album directory if not existent.
-    if (createDir(strcpy(dst, home), PCDIR) || createDir(dst, card) || (name ? createDir(dst, name) : 0)) {
-        free(dst);
+    if (createDir(path, PCPATH) || createDir(path, card) || (name ? createDir(path, name) : 0)) {
+        free(path);
         return NULL;
     }
-    return dst; // must be free'd by caller
+    return path; // must be free'd by caller
 }
 
 /*
- * Fetch a file and backup it if not existent.
+ * Fetch a file and backup it, if not existent.
  */
 int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, const char *dstDir, const char *file) {
     char srcPath[strlen(srcDir) + strlen(file) + 2];
@@ -259,19 +317,29 @@ int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, c
                 statErr = 0; // reset old state
             // And set the destination file modified time to that date.
             } else if (!(statErr = stat(dstPath, &fstat))) {
+                //jp_logf(L_DEBUG, "%s:       modified: %s", MYNAME, ctime(&date));
                 struct utimbuf utim;
                 utim.actime = (time_t)fstat.st_atime;
                 utim.modtime = date;
                 statErr = utime(dstPath, &utim);
             }
             if (statErr) {
-                jp_logf(L_WARN, "%s:      WARNING: Cannot set date of file '%s'\n", MYNAME, dstPath);
+                jp_logf(L_WARN, "%s:      WARNING: Cannot set date of file '%s', ErrCode=%d\n", MYNAME, dstPath, statErr);
             }
         }
     }
     dlp_VFSFileClose(sd, fileRef);
-    jp_logf(L_DEBUG, "%s:      File size of '%s': %d\n", MYNAME, dstPath, filesize);
+    jp_logf(L_DEBUG, "%s:      File size / copy result of '%s': %d, statErr=%d\n", MYNAME, dstPath, filesize, statErr);
     return filesize;
+}
+
+int casecmpFileTypeList(char *fname) {
+    char *ext = strrchr(fname, '.');
+    int result = 1;
+    for (fileType *tmp = fileTypeList; ext && tmp; tmp = tmp->next) {
+        if (!(result = strcasecmp(ext, tmp->ext)))  break;
+    }
+    return result;
 }
 
 /*
@@ -308,16 +376,19 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
     //while (itr != (unsigned)vfsIteratorStop) { // doesn't work because of bug <https://github.com/juddmon/jpilot/issues/41>
     for (int dirItems_init = MIN_DIR_ITEMS; (dirItems = dirItems_init) <= MAX_DIR_ITEMS; dirItems_init *= 2) { // WORKAROUND
         if (--loops < 0)  break; // for debugging
-        jp_logf(L_DEBUG, "%s:     Enumerate album '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
         itr = (unsigned long)vfsIteratorStart; // workaround, reset itr if it wrongly was -1 or 1888
+        jp_logf(L_DEBUG, "%s:     Enumerate album '%s', dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, srcAlbumDir, dirRef, itr, dirItems);
         if ((result = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
             // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41>):
             // - Why in case of i.e. setting dirItems=4, itr != 0, even if there are more than 4 files?
             // - Why then on SDCard itr == 1888 in the first loop, so out of allowed range?
-            jp_logf(L_FATAL, "%s:     Enumerate ERROR: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+            jp_logf(L_FATAL, "%s:     Enumerate ERROR: result=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
             goto Exit;
         }
-        jp_logf(L_DEBUG, "%s:     Enumerate OK: result=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+        jp_logf(L_DEBUG, "%s:     Enumerate OK: result=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, result, dirRef, itr, dirItems);
+        for (int i= dirItems_init==MIN_DIR_ITEMS ? 0 : dirItems_init/2; i<dirItems; i++) {
+            jp_logf(L_DEBUG, "%s:      dirItem %3d: '%s' attribute %x\n", MYNAME, i, dirInfos[i].name, dirInfos[i].attr);
+        }
         if (dirItems < dirItems_init) {
             break;
         }
@@ -328,21 +399,14 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
         jp_logf(L_DEBUG, "%s:      Found file '%s' attribute %x\n", MYNAME, fname, dirInfos[i].attr);
         // Grab only regular files, but ignore the 'read only' and 'archived' bits,
         // and only with known extensions.
-        char *ext = fname + strlen(fname)-4;
         if (dirInfos[i].attr & (
                 vfsFileAttrHidden      |
                 vfsFileAttrSystem      |
                 vfsFileAttrVolumeLabel |
                 vfsFileAttrDirectory   |
-                vfsFileAttrLink) ||
-                strlen(fname) < 4 || (
-                //strcasecmp(ext, ".thb") &&  // thumbnail from album #Thumbnail (Treo 650)
-                //strcasecmp(ext+1, ".db") && // DB file
-                strcasecmp(ext, ".jpg") &&  // JPEG picture
-                strcasecmp(ext, ".3gp") &&  // video (GSM phones)
-                strcasecmp(ext, ".3g2") &&  // video (CDMA phones)
-                strcasecmp(ext, ".amr") &&  // audio caption (GSM phones)
-                strcasecmp(ext, ".qcp"))) { // audio caption (CDMA phones)
+                vfsFileAttrLink)  ||
+                strlen(fname) < 2 ||
+                casecmpFileTypeList(fname)) {
             continue;
         }
         if (fetchFileIfNeeded(sd, volRef, srcAlbumDir, dstAlbumDir, fname) < 0) {
@@ -352,14 +416,14 @@ int fetchAlbum(const int sd, const unsigned volRef, FileRef dirRef, const char *
     free(dstAlbumDir);
 Exit:
     if (name)  dlp_VFSFileClose(sd, dirRef);
-    jp_logf(L_DEBUG, "%s:   Album '%s': result=%d\n", MYNAME,  srcAlbumDir, result);
+    jp_logf(L_DEBUG, "%s:    Album '%s' done -> result=%d\n", MYNAME,  srcAlbumDir, result);
     return result;
 }
 
 /*
  *  Backup all albums from volume volRef.
  */
-int backupMedia(const int sd, int volRef) {
+int backupVolume(const int sd, int volRef) {
     PI_ERR rootResult = -3, result = 0;
 
     jp_logf(L_DEBUG, "%s:  Searching roots on volume %d\n", MYNAME, volRef);
@@ -384,32 +448,32 @@ int backupMedia(const int sd, int volRef) {
         while ((enum dlpVFSFileIteratorConstants)itr != vfsIteratorStop) {
             int dirItems = 1024;
             VFSDirInfo dirInfos[dirItems];
-            jp_logf(L_DEBUG, "%s:   Enumerate root '%s', dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
+            jp_logf(L_DEBUG, "%s:   Enumerate root '%s', dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, ROOTDIRS[d], dirRef, itr, dirItems);
             PI_ERR enRes;
             if ((enRes = dlp_VFSDirEntryEnumerate(sd, dirRef, &itr, &dirItems, dirInfos)) < 0) {
                 // Further research is neccessary (see: <https://github.com/juddmon/jpilot/issues/41> ):
                 // - Why in case of i.e. setting dirItems=4, itr == vfsIteratorStop, even if there are more than 4 files?
                 // - For workaround and additional bug on SDCard volume, see at fetchAlbum()
-                jp_logf(L_FATAL, "%s:   Enumerate ERROR: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                jp_logf(L_FATAL, "%s:   Enumerate ERROR: enRes=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
                 rootResult = -3;
                 break;
             } else {
-                jp_logf(L_DEBUG, "%s:   Enumerate OK: enRes=%d, dirRef=%lx, itr=%lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
+                jp_logf(L_DEBUG, "%s:   Enumerate OK: enRes=%4d, dirRef=%8lx, itr=%4lx, dirItems=%d\n", MYNAME, enRes, dirRef, itr, dirItems);
             }
             jp_logf(L_DEBUG, "%s:   Now search for albums to fetch ...\n", MYNAME);
             for (int i=0; i<dirItems; i++) {
                 jp_logf(L_DEBUG, "%s:    Found album candidate '%s'\n", MYNAME,  dirInfos[i].name);
                 // Treo 650 has #Thumbnail dir that is not an album
-                if (dirInfos[i].attr & vfsFileAttrDirectory && strcmp(dirInfos[i].name, "#Thumbnail")) {
-                //if (dirInfos[i].attr & vfsFileAttrDirectory) { // With thumbnails album
+                if (dirInfos[i].attr & vfsFileAttrDirectory && (synchThumbnailsAlbum || strcmp(dirInfos[i].name, "#Thumbnail"))) {
                     jp_logf(L_DEBUG, "%s:    Found real album '%s'\n", MYNAME, dirInfos[i].name);
-                    result = MIN(fetchAlbum(sd, volRef, 0, ROOTDIRS[d], dirInfos[i].name), result);
+                    int albumResult = fetchAlbum(sd, volRef, 0, ROOTDIRS[d], dirInfos[i].name);
+                    result = MIN(result, albumResult);
                 }
             }
         }
         dlp_VFSFileClose(sd, dirRef);
     }
-    jp_logf(L_DEBUG, "%s:  Volume %d: rootResult=%d, result=%d\n", MYNAME,  volRef, rootResult, result);
+    jp_logf(L_DEBUG, "%s:  Volume %d done -> rootResult=%d, result=%d\n", MYNAME,  volRef, rootResult, result);
     return rootResult + result;
 }
 
@@ -465,6 +529,6 @@ int volumeEnumerateIncludeHidden(const int sd, int *numVols, int *volRefs) {
             result = 4; // fake dlp_VFSVolumeEnumerate() with 1 volume return value
     }
 Exit:
-    jp_logf(L_DEBUG, "%s: volumeEnumerateIncludeHidden found %d volumes, result=%d\n", MYNAME, *numVols, result);
+    jp_logf(L_DEBUG, "%s: volumeEnumerateIncludeHidden found %d volumes -> result=%d\n", MYNAME, *numVols, result);
     return result;
 }

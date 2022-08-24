@@ -4,7 +4,7 @@
  * libplugin.h
  * A module of J-Pilot http://jpilot.org
  *
- * Copyright (C) 1999-2002 by Judd Montgomery
+ * Copyright (C) 1999-2014 by Judd Montgomery
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 /* #include <gtk/gtk.h> commented out by Dan Bodoh, gtk not used here */
 #include <time.h>
 #include <pi-appinfo.h>
+#include "log.h"
 
 /*
  * PLUGIN API for J-Pilot
@@ -53,9 +54,9 @@
 
 
 typedef struct {
-  unsigned char Offset[4];  /*4 bytes offset from BOF to record */
-  unsigned char attrib;
-  unsigned char unique_ID[3];
+   unsigned char Offset[4];  /*4 bytes offset from BOF to record */
+   unsigned char attrib;
+   unsigned char unique_ID[3];
 } record_header;
 
 typedef struct {
@@ -74,6 +75,23 @@ typedef struct mem_rec_header_s {
    unsigned char attrib;
    struct mem_rec_header_s *next;
 } mem_rec_header;
+
+typedef struct {
+            char db_name[32];
+   unsigned char flags[2];
+   unsigned char version[2];
+   unsigned char creation_time[4];
+   unsigned char modification_time[4];
+   unsigned char backup_time[4];
+   unsigned char modification_number[4];
+   unsigned char app_info_offset[4];
+   unsigned char sort_info_offset[4];
+            char type[4]; /* Database ID */
+            char creator_id[4]; /* Application ID */
+            char unique_id_seed[4];
+   unsigned char next_record_list_id[4];
+   unsigned char number_of_records[2];
+} RawDBHeader;
 
 #define LEN_RAW_DB_HEADER 78
 
@@ -120,17 +138,18 @@ int get_next_unique_pc_id(unsigned int *next_unique_id);
 #define CLIST_OVERDUE_RED 0xD900
 #define CLIST_OVERDUE_GREEN 0x0000
 #define CLIST_OVERDUE_BLUE 0x0000
-
+#define CLIST_DUENOW_RED 4369
+#define CLIST_DUENOW_GREEN 40863
+#define CLIST_DUENOW_BLUE 35466
 
 #define DIALOG_SAID_1        454
 #define DIALOG_SAID_PRINT    454
 #define DIALOG_SAID_FOURTH   454
-#define DIALOG_SAID_CURRENT  454
 #define DIALOG_SAID_2        455
 #define DIALOG_SAID_LAST     455
-#define DIALOG_SAID_ALL      455
 #define DIALOG_SAID_3        456
 #define DIALOG_SAID_CANCEL   456
+#define DIALOG_SAID_4        457
 
 #define JP_LOG_DEBUG  1    /*debugging info for programmers, and bug reports */
 #define JP_LOG_INFO   2    /*info, and misc messages */
@@ -141,8 +160,6 @@ int get_next_unique_pc_id(unsigned int *next_unique_id);
 #define JP_LOG_GUI    1024 /*messages always go to the gui window */
 
 #define JPILOT_EOF -7
-
-extern int jp_logf(int level, char *format, ...);
 
 /* This bit means that this record is of no importance anymore */
 #define SPENT_PC_RECORD_BIT 256
@@ -180,15 +197,18 @@ struct search_result
    struct search_result *next;
 };
 
+
+void plugin_version(int *major_version, int *minor_version);
 int plugin_get_name(char *name, int len);
 int plugin_get_menu_name(char *name, int len);
-int plugin_get_db_name(char *db_name, int len);
 int plugin_get_help_name(char *name, int len);
+int plugin_get_db_name(char *db_name, int len);
 int plugin_startup(jp_startup_info *info);
-/* int plugin_gui(GtkWidget *vbox, GtkWidget *hbox, unsigned int unique_id);
- *    commented out by Dan Bodoh; not using gtk
- */
+/* int plugin_gui(GtkWidget *vbox, GtkWidget *hbox, unsigned int unique_id); commented out by Dan Bodoh; not using gtk */
 int plugin_help(char **text, int *width, int *height);
+int plugin_print(void);
+/* int plugin_import(GtkWidget *window); commented out by Dan Bodoh, gtk not used here */
+/* int plugin_export(GtkWidget *window); commented out by Dan Bodoh, gtk not used here */
 int plugin_gui_cleanup(void);
 int plugin_pre_sync_pre_connect(void);
 int plugin_pre_sync(void);
@@ -197,26 +217,25 @@ int plugin_search(const char *search_string, int case_sense, struct search_resul
 int plugin_post_sync(void);
 int plugin_exit_cleanup(void);
 int plugin_unpack_cai_from_ai(struct CategoryAppInfo *cai,
-			      unsigned char *ai_raw, int len);
+                              unsigned char *ai_raw, int len);
 int plugin_pack_cai_into_ai(struct CategoryAppInfo *cai,
-			    unsigned char *ai_raw, int len);
+                            unsigned char *ai_raw, int len);
 /* callbacks are needed for print */
 
-void jp_init();
-extern FILE *jp_open_home_file(char *filename, char *mode);
+void jp_init(void);
 
 /* This takes the value of $JPILOT_HOME and appends /.jpilot/ and {file}
  * onto it and puts it into full_name.  max_size is the size if the
  * supplied buffer full_name
  */
-int jp_get_home_file_name(char *file, char *full_name, int max_size);
+int jp_get_home_file_name(const char *file, char *full_name, int max_size);
 
 /*
  * DB_name should be without filename ext, e.g. MemoDB
  * bufp is the packed app info block
  * size_in is the size of bufp
  */
-int jp_pdb_file_write_app_block(char *DB_name, void *bufp, int size_in);
+int jp_pdb_file_write_app_block(const char *DB_name, void *bufp, int size_in);
 
 /*
  * widget is a widget inside the main window used to get main window handle
@@ -224,15 +243,8 @@ int jp_pdb_file_write_app_block(char *DB_name, void *bufp, int size_in);
  * cai is the category app info.  This should be unpacked by the user since
  * category unpack functions are database specific.
  */
-/* commented out by Dan Bodoh, not using gtk
-int jp_edit_cats(GtkWidget *widget, char *db_name, struct CategoryAppInfo *cai);
-*/
 
-/*************************************
- * convert char code
- *************************************/
-extern void jp_charset_j2p(char *buf, int max_len);
-extern void jp_charset_p2j(char *buf, int max_len);
+/* int jp_edit_cats(GtkWidget *widget, char *db_name, struct CategoryAppInfo *cai); commented out by Dan Bodoh, not using gtk */
 
 /* file must not be open elsewhere when this is called, the first line is 0 */
 int jp_install_remove_line(int deleted_line);
@@ -242,33 +254,31 @@ int jp_install_append_line(char *line);
 /*
  * Get the application info block
  */
-int jp_get_app_info(char *DB_name, unsigned char **buf, int *buf_size);
+int jp_get_app_info(const char *DB_name, unsigned char **buf, int *buf_size);
 /*
  * Read a pdb file out of the $(JPILOT_HOME || HOME)/.jpilot/ directory
  * It also reads the PC file
  */
-/* commented out by Dan Bodoh, not using GTK
-int jp_read_DB_files(char *DB_name, GList **records);
-*/
+/* int jp_read_DB_files(const char *DB_name, GList **records); commented out by Dan Bodoh, not using GTK */
 
 /*
  *This deletes a record from the appropriate Datafile
  */
-int jp_delete_record(char *DB_name, buf_rec *br, int flag);
+int jp_delete_record(const char *DB_name, buf_rec *br, int flag);
 /*
  *This undeletes a record from the appropriate Datafile
  */
-int jp_undelete_record(char *DB_name, buf_rec *br, int flag);
+int jp_undelete_record(const char *DB_name, buf_rec *br, int flag);
 /*
  * Free the record list
  */
-/* commented out by Dan Bodoh, not using GTK
-int jp_free_DB_records(GList **records);
-*/
+/* int jp_free_DB_records(GList **records); commented out by Dan Bodoh, not using GTK */
 
-int jp_pc_write(char *DB_name, buf_rec *br);
+int jp_pc_write(const char *DB_name, buf_rec *br);
 
 const char *jp_strstr(const char *haystack, const char *needle, int case_sense);
+
+int pc_read_next_rec(FILE *in, buf_rec *br);
 
 int read_header(FILE *pc_in, PC3RecordHeader *header);
 
@@ -286,29 +296,21 @@ int unlink_file(char *filename);
 /* */
 int get_app_info_size(FILE *in, int *size);
 
-/*
- * Widget must be some widget used to get the main window from.
- * The main window passed in would be fastest.
- * changed is MODIFY_FLAG, or NEW_FLAG
- */
-/* commented out by Dan Bodoh, not using GTK
-int dialog_save_changed_record(GtkWidget *widget, int changed);
-*/
-
 /* mon 0-11
  * day 1-31
  * year (year - 1900)
  * This function will bring up the cal at mon, day, year
  * After a new date is selected it will return mon, day, year
  */
-/* commented out by Dan Bodoh, not using GTK
-int jp_cal_dialog(GtkWindow *main_window,
-		  const char *title, int monday_is_fdow,
-		  int *mon, int *day, int *year);
-*/
-/* commented out by Dan Bodoh, not using GTK
-int dialog_save_changed_record(GtkWidget *widget, int changed);
-*/
+
+/*
+ * Widget must be some widget used to get the main window from.
+ * The main window passed in would be fastest.
+ * changed is MODIFY_FLAG, or NEW_FLAG
+ */
+/* int jp_cal_dialog(GtkWindow *main_window,
+                  const char *title, int monday_is_fdow,
+                  int *mon, int *day, int *year); commented out by Dan Bodoh, not using GTK */
 
 /*
  * The preferences interface makes it easy to read and write name/value pairs
@@ -320,7 +322,7 @@ int dialog_save_changed_record(GtkWidget *widget, int changed);
 
 /* I explain these below */
 typedef struct {
-   char *name;
+   const char *name;
    int usertype;
    int filetype;
    long ivalue;
@@ -378,9 +380,18 @@ int jp_set_pref(prefType prefs[], int which, long n, const char *string);
 /*
  * This function reads an rc file and sets the preferences from it.
  */
-int jp_pref_read_rc_file(char *filename, prefType prefs[], int num_prefs);
+int jp_pref_read_rc_file(const char *filename, prefType prefs[], int num_prefs);
 /*
  * This function writes preferences to an rc file.
  */
-int jp_pref_write_rc_file(char *filename, prefType prefs[], int num_prefs);
+int jp_pref_write_rc_file(const char *filename, prefType prefs[], int num_prefs);
+
+/*************************************
+ * convert char code
+ *************************************/
+extern void jp_charset_j2p(char *buf, int max_len);
+extern void jp_charset_p2j(char *buf, int max_len);
+
+extern FILE *jp_open_home_file(char *filename, char *mode);
+
 #endif
