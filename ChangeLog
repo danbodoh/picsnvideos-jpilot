@@ -1,3 +1,7 @@
+Version 0.3.1   Aug 25, 2022
+Ulf Zibis <Ulf.Zibis@CoSoCo.de>
+* Don't owerwrite existing files, create renamed copies instead.
+
 Version 0.3   Aug 23, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
 

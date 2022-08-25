@@ -258,7 +258,7 @@ char *destinationDir(const int sd, const unsigned volRef, const char *name) {
  */
 int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, const char *dstDir, const char *file) {
     char srcPath[strlen(srcDir) + strlen(file) + 2];
-    char dstPath[strlen(dstDir) + strlen(file) + 2];
+    char dstPath[strlen(dstDir) + strlen(file) + 4]; // prepare for possible renamme
     FileRef fileRef;
     int filesize; // also serves as error return code
 
@@ -266,11 +266,12 @@ int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, c
     strcat(strcat(strcpy(dstPath, dstDir), "/"), file);
 
     if (dlp_VFSFileOpen(sd, volRef, srcPath, vfsModeRead, &fileRef) < 0) {
-          jp_logf(L_FATAL, "%s:      ERROR: Could not open file '%s' on volume %d\n", MYNAME, srcPath, volRef);
+          jp_logf(L_FATAL, "%s:      ERROR: Could not open file '%s' on volume %d for reading.\n", MYNAME, srcPath, volRef);
           return -1;
     }
     if (dlp_VFSFileSize(sd, fileRef, (int *)(&filesize)) < 0) {
         jp_logf(L_WARN, "%s:      WARNING: Could not get size of '%s' on volume %d, so anyway fetch it.\n", MYNAME, srcPath, volRef);
+        filesize = 0;
     }
 
     struct stat fstat;
@@ -279,27 +280,40 @@ int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, c
         jp_logf(L_DEBUG, "%s:      File '%s' already exists, not copying it\n", MYNAME, dstPath);
     } else { // If file has not already been backuped, fetch it.
         if (!statErr) {
-            jp_logf(L_DEBUG, "%s:      File '%s' already exists, but has different size %d vs. %d\n", MYNAME, dstPath, fstat.st_size, filesize);
+            jp_logf(L_WARN, "%s:      WARNING: File '%s' already exists, but has different size %d vs. %d,\n", MYNAME, dstPath, fstat.st_size, filesize);
+            // Find alternative destination file name, which not alredy exists, by inserting a number.
+            char *insert = strrchr(dstPath, '.');
+            for (char *i = dstPath + strlen(dstPath); i >= insert; i--)  *(i + 2) = *i;
+            *insert++ = '_';  *insert = '1';
+            for (; !stat(dstPath, &fstat); (*insert)++) {; // increment number by 1
+                if (*insert >= '9') {
+                    jp_logf(L_WARN, "%s:               and even file '%s' already exists, so no new backup for '%s'.\n", MYNAME, dstPath, srcPath);
+                    filesize = -1; // remember error
+                    goto Exit;
+                }
+            }
+            jp_logf(L_WARN, "%s:               so backup '%s' to '%s'.\n", MYNAME, srcPath, dstPath);
         }
         // Open destination file.
         FILE *dstFp;
         jp_logf(L_GUI, "%s:      Fetching %s ...", MYNAME, dstPath);
         if (!(dstFp = fopen(dstPath, "w"))) {
-            jp_logf(L_FATAL, "\n%s:       ERROR: Cannot open %s for writing!\n", MYNAME, dstPath);
-            return -1;
+            jp_logf(L_FATAL, "\n%s:       ERROR: Cannot open %s for writing %d bytes!\n", MYNAME, dstPath, filesize);
+            filesize = -1; // remember error
+            goto Exit;
         }
         // Copy file.
         for (pi_buffer_t *buf = pi_buffer_new(65536); filesize > 0; filesize -= buf->used) {
             pi_buffer_clear(buf);
             if (dlp_VFSFileRead(sd, fileRef, buf, (filesize > buf->allocated ? buf->allocated : filesize)) < 0)  {
             //if (dlp_VFSFileRead(sd, fileRef, buf, buf->allocated) < 0)  { // works too, but is very slow
-                jp_logf(L_FATAL, "\n%s:       ERROR: File read error; aborting\n", MYNAME);
+                jp_logf(L_FATAL, "\n%s:       ERROR: File read error; aborting at %d bytes left.\n", MYNAME, filesize);
                 filesize = -1; // remember error
                 break;
             }
             for (int writesize, offset = 0; offset < buf->used; offset += writesize) {
                 if ((writesize = fwrite(buf->data + offset, 1, buf->used - offset, dstFp)) < 0) {
-                    jp_logf(L_FATAL, "\n%s:       ERROR: File write error; aborting\n", MYNAME);
+                    jp_logf(L_FATAL, "\n%s:       ERROR: File write error; aborting at %d bytes left.\n", MYNAME, filesize - offset);
                     filesize = writesize; // remember error; breaks the outer loop
                     break;
                 }
@@ -328,6 +342,7 @@ int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, c
             }
         }
     }
+Exit:
     dlp_VFSFileClose(sd, fileRef);
     jp_logf(L_DEBUG, "%s:      File size / copy result of '%s': %d, statErr=%d\n", MYNAME, dstPath, filesize, statErr);
     return filesize;

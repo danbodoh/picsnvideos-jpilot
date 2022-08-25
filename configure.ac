@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.71])
-AC_INIT([picsnvideos],[0.3])
+AC_INIT([picsnvideos],[0.3.1])
 AM_INIT_AUTOMAKE
 AC_CONFIG_SRCDIR([picsnvideos.c])
 AC_CONFIG_HEADERS([config.h])
