@@ -1,5 +1,3 @@
-/* $Id: libplugin.h,v 1.1 2008/05/15 00:16:27 danbodoh Exp $ */
-
 /*******************************************************************************
  * libplugin.h
  * A module of J-Pilot http://jpilot.org

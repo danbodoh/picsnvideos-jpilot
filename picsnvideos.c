@@ -1,5 +1,3 @@
-/* $Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $ */
-
 /*******************************************************************************
  * picsnvideos.c
  *
@@ -51,8 +49,6 @@ typedef struct VFSInfo VFSInfo;
 typedef struct VFSDirInfo VFSDirInfo;
 typedef struct fileType {char ext[16]; struct fileType *next;} fileType;
 
-static const char rcsid[] = "$Id: picsnvideos.c,v 1.8 2008/05/17 03:13:07 danbodoh Exp $";
-
 static const char HELP_TEXT[] =
 "JPilot plugin (c) 2008 by Dan Bodoh\n\
 Contributor (2022): Ulf Zibis <Ulf.Zibis@CoSoCo.de>\n\
@@ -93,7 +89,6 @@ int backupVolume(const int, int);
 void plugin_version(int *major_version, int *minor_version) {
     *major_version = 0;
     *minor_version = 99;
-    jp_logf(L_DEBUG, "picsnvideos version %s (%s)\n", VERSION, rcsid);
 }
 
 int plugin_get_name(char *name, int len) {
