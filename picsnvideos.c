@@ -75,12 +75,16 @@ static prefType PREFS[] = {
     // video (CDMA phones)
     // audio caption (GSM phones)
     // audio caption (CDMA phones)
-    {"fileTypes", CHARTYPE, CHARTYPE, 0, ".jpg.3gp.3g2.amr.qcp" , 256}
+    {"fileTypes", CHARTYPE, CHARTYPE, 0, ".jpg.3gp.3g2.amr.qcp" , 256},
+    {"compareContent", INTTYPE, INTTYPE, 0, NULL, 0}
 };
 static const unsigned NUM_PREFS = sizeof(PREFS)/sizeof(prefType);
 static long synchThumbnailsAlbum;
 static char *fileTypes;
+static long compareContent;
 static fileType *fileTypeList = NULL;
+static pi_buffer_t *palmBuf;
+static pi_buffer_t *pcBuf;
 
 void *mallocLog(size_t);
 int volumeEnumerateIncludeHidden(const int, int *, int *);
@@ -126,6 +130,8 @@ int plugin_startup(jp_startup_info *info) {
         jp_logf(L_WARN, "%s: WARNING: Could not read pref '%s' from PREFS[]\n", MYNAME, PREFS[0].name);
     if (jp_get_pref(PREFS, 1, NULL, (const char **)&fileTypes) < 0)
         jp_logf(L_WARN, "%s: WARNING: Could not read pref '%s' from PREFS[]\n", MYNAME, PREFS[1].name);
+    if (jp_get_pref(PREFS, 2, &compareContent, NULL) < 0)
+        jp_logf(L_WARN, "%s: WARNING: Could not read pref '%s' from PREFS[]\n", MYNAME, PREFS[2].name);
     if (jp_pref_write_rc_file(PREFS_FILE, PREFS, NUM_PREFS) < 0) // To initialize with defaults, if pref file wasn't existent.
         jp_logf(L_WARN, "%s: WARNING: Could not write PREFS to '%s'\n", MYNAME, PREFS_FILE);
     for (char *last; (last = strrchr(fileTypes, '.')) >= fileTypes; *last = 0) {
@@ -141,6 +147,8 @@ int plugin_startup(jp_startup_info *info) {
         }
     }
     jp_free_prefs(PREFS, NUM_PREFS);
+    if (!result && (result = !(palmBuf = pi_buffer_new(65536)) || !(pcBuf = pi_buffer_new(65536))))
+        jp_logf(L_FATAL, "%s: ERROR: Out of memory\n", MYNAME);
     return result;
 }
 
@@ -189,6 +197,8 @@ int plugin_exit_cleanup(void) {
         fileTypeList = fileTypeList->next;
         free(tmp);
     }
+    pi_buffer_free(palmBuf);
+    pi_buffer_free(pcBuf);
     return EXIT_SUCCESS;
 }
 
@@ -248,12 +258,46 @@ char *destinationDir(const int sd, const unsigned volRef, const char *name) {
     return path; // must be free'd by caller
 }
 
+int fileRead(const int sd, FileRef fileRef, FILE *stream, pi_buffer_t *buf, int filesize) {
+    pi_buffer_clear(buf);
+    for (int readsize = -1, todo = filesize > buf->allocated ? buf->allocated : filesize; todo > 0; todo -= readsize) {
+        if (fileRef) {
+            readsize = dlp_VFSFileRead(sd, fileRef, buf, todo);
+            //readsize = dlp_VFSFileRead(sd, fileRef, buf, buf->allocated); // works too, but is very slow
+        } else if (stream) {
+            readsize = fread(buf->data + buf->used, 1, todo, stream);
+            buf->used += readsize;
+        }
+        if (readsize < 0) {
+            jp_logf(L_FATAL, "%s:        ERROR: File read error; aborting at %d bytes left.\n", MYNAME, filesize - buf->used);
+            return readsize;
+        }
+    }
+    return (int)buf->used;
+}
+
+int fileCompare(const int sd, FileRef fileRef, FILE *stream, int filesize) {
+    int result;
+    for (int todo = filesize; todo > 0; todo -= palmBuf->used) {
+        if (fileRead(sd, fileRef, NULL, palmBuf, todo) < 0 || fileRead(0, 0, stream, pcBuf, todo) < 0 || palmBuf->used != pcBuf->used) {
+            jp_logf(L_FATAL, "%s:       ERROR: reading files for comparison, so assuming different ...\n", MYNAME);
+            jp_logf(L_DEBUG, "%s:       filesize=%d, todo=%d, palmBuf->used=%d, pcBuf->used=%d\n", MYNAME, filesize, todo, palmBuf->used, pcBuf->used);
+            result = -1; // remember error
+            break;
+        }
+        if ((result = memcmp(palmBuf->data, pcBuf->data, palmBuf->used))) {
+            break; // Files have different content.
+        }
+    }
+    return result;
+}
+
 /*
  * Fetch a file and backup it, if not existent.
  */
 int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, const char *dstDir, const char *file) {
     char srcPath[strlen(srcDir) + strlen(file) + 2];
-    char dstPath[strlen(dstDir) + strlen(file) + 4]; // prepare for possible renamme
+    char dstPath[strlen(dstDir) + strlen(file) + 4]; // prepare for possible rename
     FileRef fileRef;
     int filesize; // also serves as error return code
 
@@ -271,70 +315,90 @@ int fetchFileIfNeeded(const int sd, const unsigned volRef, const char *srcDir, c
 
     struct stat fstat;
     int statErr = stat(dstPath, &fstat);
-    if (!statErr && fstat.st_size == filesize) {
-        jp_logf(L_DEBUG, "%s:      File '%s' already exists, not copying it\n", MYNAME, dstPath);
-    } else { // If file has not already been backuped, fetch it.
-        if (!statErr) {
+    if (!statErr) {
+        int equal = 0;
+        if (fstat.st_size != filesize) {
             jp_logf(L_WARN, "%s:      WARNING: File '%s' already exists, but has different size %d vs. %d,\n", MYNAME, dstPath, fstat.st_size, filesize);
-            // Find alternative destination file name, which not alredy exists, by inserting a number.
-            char *insert = strrchr(dstPath, '.');
-            for (char *i = dstPath + strlen(dstPath); i >= insert; i--)  *(i + 2) = *i;
-            *insert++ = '_';  *insert = '1';
-            for (; !stat(dstPath, &fstat); (*insert)++) {; // increment number by 1
-                if (*insert >= '9') {
-                    jp_logf(L_WARN, "%s:               and even file '%s' already exists, so no new backup for '%s'.\n", MYNAME, dstPath, srcPath);
+        } else if (!compareContent) {
+            equal = 1;
+        } else {
+            FILE *dstStream;
+            if (!(dstStream = fopen(dstPath, "r"))) {
+                jp_logf(L_WARN, "%s:      WARNING: Cannot open %s for comparing %d bytes, so may have different content,\n", MYNAME, dstPath, filesize);
+            } else {
+                if (!(equal = !fileCompare(sd, fileRef, dstStream, filesize)))
+                    jp_logf(L_WARN, "%s:      WARNING: File '%s' already exists, but has different content,\n", MYNAME, dstPath);
+                fclose(dstStream);
+                if (dlp_VFSFileSeek(sd, fileRef, vfsOriginBeginning, 0) < 0) {
+                    jp_logf(L_FATAL, "%s:       ERROR: On file seek; So can not copy '%s', aborting ...\n", MYNAME, file);
                     filesize = -1; // remember error
                     goto Exit;
                 }
             }
-            jp_logf(L_WARN, "%s:               so backup '%s' to '%s'.\n", MYNAME, srcPath, dstPath);
         }
-        // Open destination file.
-        FILE *dstFp;
-        jp_logf(L_GUI, "%s:      Fetching %s ...", MYNAME, dstPath);
-        if (!(dstFp = fopen(dstPath, "w"))) {
-            jp_logf(L_FATAL, "\n%s:       ERROR: Cannot open %s for writing %d bytes!\n", MYNAME, dstPath, filesize);
-            filesize = -1; // remember error
+        if (equal) {
+            jp_logf(L_DEBUG, "%s:      File '%s' already exists, not copying it.\n", MYNAME, dstPath);
             goto Exit;
         }
-        // Copy file.
-        for (pi_buffer_t *buf = pi_buffer_new(65536); filesize > 0; filesize -= buf->used) {
-            pi_buffer_clear(buf);
-            if (dlp_VFSFileRead(sd, fileRef, buf, (filesize > buf->allocated ? buf->allocated : filesize)) < 0)  {
-            //if (dlp_VFSFileRead(sd, fileRef, buf, buf->allocated) < 0)  { // works too, but is very slow
-                jp_logf(L_FATAL, "\n%s:       ERROR: File read error; aborting at %d bytes left.\n", MYNAME, filesize);
+        // Find alternative destination file name, which not alredy exists, by inserting a number.
+        char *insert = strrchr(dstPath, '.');
+        for (char *i = dstPath + strlen(dstPath); i >= insert; i--)  *(i + 2) = *i;
+        *insert++ = '_';  *insert = '1';
+        for (; !stat(dstPath, &fstat); (*insert)++) {; // increment number by 1
+            if (*insert >= '9') {
+                jp_logf(L_WARN, "%s:               and even file '%s' already exists, so no new backup for '%s'.\n", MYNAME, dstPath, file);
                 filesize = -1; // remember error
-                break;
-            }
-            for (int writesize, offset = 0; offset < buf->used; offset += writesize) {
-                if ((writesize = fwrite(buf->data + offset, 1, buf->used - offset, dstFp)) < 0) {
-                    jp_logf(L_FATAL, "\n%s:       ERROR: File write error; aborting at %d bytes left.\n", MYNAME, filesize - offset);
-                    filesize = writesize; // remember error; breaks the outer loop
-                    break;
-                }
+                goto Exit;
             }
         }
-        fclose(dstFp);
-        if (filesize < 0) {
-            unlink(dstPath); // remove the partially created file
-        } else {
-            jp_logf(L_GUI, " OK\n");
-            time_t date;
-            // Get the date that the picture was created (not the file), aka modified time.
-            if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
-                jp_logf(L_WARN, "%s:      WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volRef);
-                statErr = 0; // reset old state
-            // And set the destination file modified time to that date.
-            } else if (!(statErr = stat(dstPath, &fstat))) {
-                //jp_logf(L_DEBUG, "%s:       modified: %s", MYNAME, ctime(&date));
-                struct utimbuf utim;
-                utim.actime = (time_t)fstat.st_atime;
-                utim.modtime = date;
-                statErr = utime(dstPath, &utim);
+        jp_logf(L_WARN, "%s:               so backup '%s' to '%s'.\n", MYNAME, file, dstPath);
+    }
+    // File has not already been backuped, fetch it.
+    // Open destination file.
+    FILE *dstStream;
+    jp_logf(L_GUI, "%s:      Fetching %s ...", MYNAME, dstPath);
+    if (!(dstStream = fopen(dstPath, "w"))) {
+        jp_logf(L_FATAL, "\n%s:       ERROR: Cannot open %s for writing %d bytes!\n", MYNAME, dstPath, filesize);
+        filesize = -1; // remember error
+        goto Exit;
+    }
+    // Copy file.
+    for (; filesize > 0; filesize -= palmBuf->used) {
+        pi_buffer_clear(palmBuf);
+        if (dlp_VFSFileRead(sd, fileRef, palmBuf, (filesize > palmBuf->allocated ? palmBuf->allocated : filesize)) < 0)  {
+        //if (dlp_VFSFileRead(sd, fileRef, palmBuf, palmBuf->allocated) < 0)  { // works too, but is very slow
+            jp_logf(L_FATAL, "\n%s:       ERROR: File read error; aborting at %d bytes left.\n", MYNAME, filesize);
+            filesize = -1; // remember error
+            break;
+        }
+        for (int writesize, offset = 0; offset < palmBuf->used; offset += writesize) {
+            if ((writesize = fwrite(palmBuf->data + offset, 1, palmBuf->used - offset, dstStream)) < 0) {
+                jp_logf(L_FATAL, "\n%s:       ERROR: File write error; aborting at %d bytes left.\n", MYNAME, filesize - offset);
+                filesize = writesize; // remember error; breaks the outer loop
+                break;
             }
-            if (statErr) {
-                jp_logf(L_WARN, "%s:      WARNING: Cannot set date of file '%s', ErrCode=%d\n", MYNAME, dstPath, statErr);
-            }
+        }
+    }
+    fclose(dstStream);
+    if (filesize < 0) {
+        unlink(dstPath); // remove the partially created file
+    } else {
+        jp_logf(L_GUI, " OK\n");
+        time_t date;
+        // Get the date that the picture was created (not the file), aka modified time.
+        if (dlp_VFSFileGetDate(sd, fileRef, vfsFileDateModified, &date) < 0) {
+            jp_logf(L_WARN, "%s:      WARNING: Cannot get date of file '%s' on volume %d\n", MYNAME, srcPath, volRef);
+            statErr = 0; // reset old state
+        // And set the destination file modified time to that date.
+        } else if (!(statErr = stat(dstPath, &fstat))) {
+            //jp_logf(L_DEBUG, "%s:       modified: %s", MYNAME, ctime(&date));
+            struct utimbuf utim;
+            utim.actime = (time_t)fstat.st_atime;
+            utim.modtime = date;
+            statErr = utime(dstPath, &utim);
+        }
+        if (statErr) {
+            jp_logf(L_WARN, "%s:      WARNING: Cannot set date of file '%s', ErrCode=%d\n", MYNAME, dstPath, statErr);
         }
     }
 Exit:

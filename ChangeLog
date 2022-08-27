@@ -1,6 +1,6 @@
-Version 0.3.3   Aug 25, 2022
+Version 0.3.3   Aug 27, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
-* 
+* Optionally compare file contents upon prefs; This can take time.
 
 Version 0.3.2   Aug 25, 2022
 Ulf Zibis <Ulf.Zibis@CoSoCo.de>
