@@ -2,6 +2,9 @@
 Picsnvideos is a plugin for JPilot. It fetches pictures and
 videos from late model Palm smartphones.
 
+Take a look at https://github.com/CoSoCo/JPilotMediaPlugin for a fork
+of this project that offers a lot more functionality.
+
 Picsnvideos supports the Treo 650, Treo 680, Treo 700p, Treo 755p, and
 the Centro.  Only the Treo 650 and Centro have been known to be tested.
 Please post your experiences with untested devices at
